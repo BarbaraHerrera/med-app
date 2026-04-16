@@ -6,84 +6,99 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  TouchableWithoutFeedback,
-  Keyboard,
-  SafeAreaView,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebaseConfig';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  createUserWithEmailAndPassword,
+  updateProfile,
+} from 'firebase/auth';
+import {
+  doc,
+  setDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
+import { auth, db } from '../firebaseConfig';
 
 export default function RegisterScreen({ navigation }) {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [securePassword, setSecurePassword] = useState(true);
-  const [secureConfirm, setSecureConfirm] = useState(true);
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
     const cleanName = fullName.trim();
     const cleanEmail = email.trim().toLowerCase();
-    const cleanPassword = password.trim();
-    const cleanConfirm = confirmPassword.trim();
 
-    if (!cleanName || !cleanEmail || !cleanPassword || !cleanConfirm) {
-      Alert.alert('Campos requeridos', 'Completa todos los campos.');
+    if (!cleanName || !cleanEmail || !password.trim() || !confirmPassword.trim()) {
+      Alert.alert('Campos incompletos', 'Completa toda la información.');
       return;
     }
 
-    if (cleanName.length < 3) {
-      Alert.alert('Nombre inválido', 'Ingresa tu nombre completo.');
+    if (password.length < 6) {
+      Alert.alert('Contraseña inválida', 'La contraseña debe tener al menos 6 caracteres.');
       return;
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(cleanEmail)) {
-      Alert.alert('Correo inválido', 'Ingresa un correo electrónico válido.');
-      return;
-    }
-
-    if (cleanPassword.length < 6) {
-      Alert.alert(
-        'Contraseña insegura',
-        'La contraseña debe tener al menos 6 caracteres.'
-      );
-      return;
-    }
-
-    if (cleanPassword !== cleanConfirm) {
+    if (password !== confirmPassword) {
       Alert.alert('Contraseñas distintas', 'Las contraseñas no coinciden.');
       return;
     }
 
     try {
       setLoading(true);
-      await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
 
-      Alert.alert(
-        'Cuenta creada',
-        'Tu cuenta fue creada correctamente. Ya puedes ingresar a MedApp.'
+      // 1) Crear usuario en Authentication
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        cleanEmail,
+        password
       );
+
+      const user = userCredential.user;
+
+      // 2) Guardar nombre visible en Auth
+      await updateProfile(user, {
+        displayName: cleanName,
+      });
+
+      // 3) Guardar datos reales en Firestore
+      await setDoc(doc(db, 'users', user.uid), {
+        uid: user.uid,
+        fullName: cleanName,
+        email: cleanEmail,
+        role: 'patient',
+        createdAt: serverTimestamp(),
+      });
+
+      Alert.alert('Cuenta creada', 'Tu cuenta fue creada y guardada correctamente.');
+
+      setFullName('');
+      setEmail('');
+      setPassword('');
+      setConfirmPassword('');
+
+      // navigation.replace('Home');
     } catch (error) {
-      let message = 'No se pudo crear la cuenta. Intenta nuevamente.';
+      console.log('REGISTER ERROR:', error);
+
+      let message = 'No pudimos crear la cuenta. Inténtalo nuevamente.';
 
       if (error.code === 'auth/email-already-in-use') {
         message = 'Ese correo ya está registrado.';
       } else if (error.code === 'auth/invalid-email') {
-        message = 'El correo no es válido.';
+        message = 'El correo no tiene un formato válido.';
       } else if (error.code === 'auth/weak-password') {
-        message = 'La contraseña es muy débil.';
-      } else if (error.code === 'auth/network-request-failed') {
-        message = 'Problema de conexión. Revisa internet e inténtalo otra vez.';
+        message = 'La contraseña es demasiado débil.';
+      } else if (error.code === 'permission-denied') {
+        message = 'Firestore bloqueó el guardado. Revisa tus reglas.';
       }
 
-      Alert.alert('Ups', message);
+      Alert.alert('Error', message);
     } finally {
       setLoading(false);
     }
@@ -91,163 +106,97 @@ export default function RegisterScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <KeyboardAvoidingView
-          style={styles.container}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-          >
+          <View style={styles.topGlow} />
+          <View style={styles.card}>
+            <View style={styles.logoCircle}>
+              <Text style={styles.logoText}>+</Text>
+            </View>
+
+            <Text style={styles.title}>Crea tu cuenta</Text>
+            <Text style={styles.subtitle}>
+              Regístrate para acceder a profesionales de la salud y gestionar tu perfil.
+            </Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Nombre completo</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Ingresa tu nombre"
+                placeholderTextColor="#94A3B8"
+                value={fullName}
+                onChangeText={setFullName}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Correo electrónico</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="tucorreo@email.com"
+                placeholderTextColor="#94A3B8"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                value={email}
+                onChangeText={setEmail}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Contraseña</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Mínimo 6 caracteres"
+                placeholderTextColor="#94A3B8"
+                secureTextEntry
+                value={password}
+                onChangeText={setPassword}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Confirmar contraseña</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Repite tu contraseña"
+                placeholderTextColor="#94A3B8"
+                secureTextEntry
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+              />
+            </View>
+
             <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => navigation.goBack()}
-              activeOpacity={0.8}
+              style={[styles.primaryButton, loading && styles.disabledButton]}
+              onPress={handleRegister}
+              disabled={loading}
             >
-              <Ionicons name="chevron-back" size={22} color="#1E293B" />
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.primaryButtonText}>Crear cuenta</Text>
+              )}
             </TouchableOpacity>
 
-            <View style={styles.header}>
-              <View style={styles.logoCircle}>
-                <Ionicons name="person-add" size={34} color="#2563EB" />
-              </View>
-
-              <Text style={styles.title}>Crear cuenta</Text>
-              <Text style={styles.subtitle}>
-                Regístrate en MedApp y accede a profesionales de la salud cerca de ti.
-              </Text>
-            </View>
-
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Completa tus datos</Text>
-
-              <View style={styles.inputContainer}>
-                <Ionicons
-                  name="person-outline"
-                  size={20}
-                  color="#64748B"
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Nombre completo"
-                  placeholderTextColor="#94A3B8"
-                  autoCapitalize="words"
-                  value={fullName}
-                  onChangeText={setFullName}
-                />
-              </View>
-
-              <View style={styles.inputContainer}>
-                <Ionicons
-                  name="mail-outline"
-                  size={20}
-                  color="#64748B"
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Correo electrónico"
-                  placeholderTextColor="#94A3B8"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  value={email}
-                  onChangeText={setEmail}
-                />
-              </View>
-
-              <View style={styles.inputContainer}>
-                <Ionicons
-                  name="lock-closed-outline"
-                  size={20}
-                  color="#64748B"
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Contraseña"
-                  placeholderTextColor="#94A3B8"
-                  secureTextEntry={securePassword}
-                  autoCapitalize="none"
-                  value={password}
-                  onChangeText={setPassword}
-                />
-                <TouchableOpacity
-                  onPress={() => setSecurePassword(!securePassword)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={securePassword ? 'eye-off-outline' : 'eye-outline'}
-                    size={20}
-                    color="#64748B"
-                  />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.inputContainer}>
-                <Ionicons
-                  name="shield-checkmark-outline"
-                  size={20}
-                  color="#64748B"
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Confirmar contraseña"
-                  placeholderTextColor="#94A3B8"
-                  secureTextEntry={secureConfirm}
-                  autoCapitalize="none"
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
-                />
-                <TouchableOpacity
-                  onPress={() => setSecureConfirm(!secureConfirm)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={secureConfirm ? 'eye-off-outline' : 'eye-outline'}
-                    size={20}
-                    color="#64748B"
-                  />
-                </TouchableOpacity>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.registerButton, loading && styles.buttonDisabled]}
-                onPress={handleRegister}
-                disabled={loading}
-                activeOpacity={0.85}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Text style={styles.registerButtonText}>Crear cuenta</Text>
-                    <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
-                  </>
-                )}
-              </TouchableOpacity>
-
-              <View style={styles.loginRow}>
-                <Text style={styles.loginText}>¿Ya tienes cuenta?</Text>
-                <TouchableOpacity
-                  onPress={() => navigation.navigate('Login')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.loginLink}> Inicia sesión</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.footer}>
-              <Text style={styles.footerText}>Registro seguro • MedApp</Text>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </TouchableWithoutFeedback>
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={() => navigation.goBack()}
+              disabled={loading}
+            >
+              <Text style={styles.secondaryButtonText}>Ya tengo cuenta</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -255,143 +204,110 @@ export default function RegisterScreen({ navigation }) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#F8FAFC',
   },
-  container: {
+  flex: {
     flex: 1,
   },
-  scrollContent: {
+  scroll: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 28,
+    padding: 24,
   },
-  backButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 4,
-    marginBottom: 20,
-    alignSelf: 'flex-start',
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  logoCircle: {
-    width: 82,
-    height: 82,
-    borderRadius: 41,
-    backgroundColor: '#DBEAFE',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 18,
-    shadowColor: '#2563EB',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  title: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#64748B',
-    textAlign: 'center',
-    lineHeight: 22,
-    paddingHorizontal: 10,
+  topGlow: {
+    position: 'absolute',
+    top: 60,
+    alignSelf: 'center',
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: 'rgba(37, 99, 235, 0.08)',
   },
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 28,
     padding: 24,
     shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 14 },
     shadowOpacity: 0.08,
-    shadowRadius: 24,
+    shadowRadius: 20,
     elevation: 6,
   },
-  cardTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 20,
-  },
-  inputContainer: {
-    height: 58,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#F8FAFC',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    marginBottom: 14,
-  },
-  inputIcon: {
-    marginRight: 10,
-  },
-  input: {
-    flex: 1,
-    color: '#0F172A',
-    fontSize: 15,
-  },
-  registerButton: {
-    height: 58,
-    borderRadius: 18,
+  logoCircle: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
     backgroundColor: '#2563EB',
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 6,
-    shadowColor: '#2563EB',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 5,
+    alignSelf: 'center',
+    marginBottom: 18,
   },
-  buttonDisabled: {
-    opacity: 0.75,
+  logoText: {
+    color: '#FFFFFF',
+    fontSize: 34,
+    fontWeight: '800',
   },
-  registerButtonText: {
+  title: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#0F172A',
+    textAlign: 'center',
+  },
+  subtitle: {
+    marginTop: 8,
+    marginBottom: 24,
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#64748B',
+    textAlign: 'center',
+  },
+  inputGroup: {
+    marginBottom: 14,
+  },
+  label: {
+    marginBottom: 8,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  input: {
+    height: 54,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    backgroundColor: '#F8FAFC',
+    fontSize: 15,
+    color: '#0F172A',
+  },
+  primaryButton: {
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  disabledButton: {
+    opacity: 0.7,
+  },
+  primaryButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '800',
   },
-  loginRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 20,
-  },
-  loginText: {
-    color: '#64748B',
-    fontSize: 14,
-  },
-  loginLink: {
-    color: '#2563EB',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  footer: {
-    marginTop: 22,
+  secondaryButton: {
+    height: 56,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  footerText: {
-    color: '#94A3B8',
-    fontSize: 13,
-    fontWeight: '600',
+  secondaryButtonText: {
+    color: '#0F172A',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

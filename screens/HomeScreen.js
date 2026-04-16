@@ -1,667 +1,794 @@
-// screens/HomeScreen.js
-
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
   TextInput,
-  FlatList,
+  Alert,
   ActivityIndicator,
-  Modal,
-  Pressable,
-  StatusBar,
+  Dimensions,
+  ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
-import { Ionicons } from '@expo/vector-icons';
-import { auth, db } from '../firebaseConfig';
+import * as Location from 'expo-location';
 import { signOut } from 'firebase/auth';
 import { collection, getDocs } from 'firebase/firestore';
+import { auth, db } from '../firebaseConfig';
+
+const { width } = Dimensions.get('window');
+
+const CATEGORIES = [
+  'Psicólogo',
+  'Enfermera',
+  'Kinesiólogo',
+  'Nutricionista',
+  'Médico General',
+];
 
 export default function HomeScreen({ navigation }) {
-  const [search, setSearch] = useState('');
   const [professionals, setProfessionals] = useState([]);
-  const [filtered, setFiltered] = useState([]);
+  const [filteredProfessionals, setFilteredProfessionals] = useState([]);
+  const [search, setSearch] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
   const [loading, setLoading] = useState(true);
-  const [menuVisible, setMenuVisible] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState('Todos');
+  const [userLocation, setUserLocation] = useState(null);
 
-  const categories = useMemo(
-    () => ['Todos', 'Psicólogo', 'Enfermera', 'Kinesiólogo'],
-    []
-  );
+  const mapRef = useRef(null);
 
-  const [region] = useState({
-    latitude: -33.4489,
-    longitude: -70.6693,
-    latitudeDelta: 0.04,
-    longitudeDelta: 0.04,
-  });
+  const userName = auth.currentUser?.email?.split('@')[0] || 'Usuario';
 
   useEffect(() => {
-    loadProfessionals();
+    loadInitialData();
   }, []);
 
   useEffect(() => {
-    applyFilters(search, selectedCategory, professionals);
+    filterProfessionals(search, selectedCategory);
   }, [search, selectedCategory, professionals]);
 
-  const loadProfessionals = async () => {
+  const featuredProfessional = useMemo(() => {
+    if (!filteredProfessionals.length) return null;
+    return filteredProfessionals[0];
+  }, [filteredProfessionals]);
+
+  const loadInitialData = async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'professionals'));
-      const list = [];
-
-      querySnapshot.forEach((docItem) => {
-        list.push({
-          id: docItem.id,
-          ...docItem.data(),
-        });
-      });
-
-      setProfessionals(list);
-      setFiltered(list);
+      setLoading(true);
+      await Promise.all([getUserLocation(), loadProfessionals()]);
     } catch (error) {
-      console.log('Error cargando profesionales:', error);
+      console.log('Error inicial:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const applyFilters = (text, category, sourceList = professionals) => {
-    const q = (text || '').toLowerCase().trim();
-
-    const result = sourceList.filter((item) => {
-      const name = (item.name || '').toLowerCase();
-      const specialty = (item.specialty || '').toLowerCase();
-      const city = (item.city || '').toLowerCase();
-
-      const matchesSearch =
-        !q ||
-        name.includes(q) ||
-        specialty.includes(q) ||
-        city.includes(q);
-
-      const matchesCategory =
-        category === 'Todos' ||
-        specialty.includes(category.toLowerCase());
-
-      return matchesSearch && matchesCategory;
-    });
-
-    setFiltered(result);
-  };
-
-  const handleLogout = async () => {
-    setMenuVisible(false);
+  const getUserLocation = async () => {
     try {
-      await signOut(auth);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso denegado',
+          'No pudimos acceder a tu ubicación. Se mostrará una ubicación por defecto.'
+        );
+        setUserLocation({
+          latitude: -33.4489,
+          longitude: -70.6693,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        });
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+      setUserLocation({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
     } catch (error) {
-      console.log('Error cerrando sesión:', error);
+      console.log('Error al obtener ubicación:', error);
+      setUserLocation({
+        latitude: -33.4489,
+        longitude: -70.6693,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
     }
   };
 
-  const renderChip = (item) => {
-    const active = selectedCategory === item;
+  const getDistanceInKm = (lat1, lon1, lat2, lon2) => {
+    const toRad = (value) => (value * Math.PI) / 180;
+    const R = 6371;
 
-    return (
-      <TouchableOpacity
-        key={item}
-        style={[styles.chip, active && styles.chipActive]}
-        onPress={() => setSelectedCategory(item)}
-        activeOpacity={0.9}
-      >
-        <Text style={[styles.chipText, active && styles.chipTextActive]}>
-          {item}
-        </Text>
-      </TouchableOpacity>
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const enrichProfessionalsWithDistance = (items, location) => {
+    if (!location) return items;
+
+    return items
+      .map((item) => {
+        const distanceKm = getDistanceInKm(
+          location.latitude,
+          location.longitude,
+          item.location.latitude,
+          item.location.longitude
+        );
+
+        return {
+          ...item,
+          distanceKm,
+        };
+      })
+      .sort((a, b) => a.distanceKm - b.distanceKm);
+  };
+
+  const loadProfessionals = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'professionals'));
+      const data = querySnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+
+      const validData = data.filter(
+        (item) =>
+          item.location &&
+          typeof item.location.latitude === 'number' &&
+          typeof item.location.longitude === 'number'
+      );
+
+      const sortedData = enrichProfessionalsWithDistance(validData, userLocation);
+
+      setProfessionals(sortedData);
+      setFilteredProfessionals(sortedData);
+    } catch (error) {
+      console.log('Error al cargar profesionales:', error);
+      Alert.alert(
+        'Error',
+        'No pudimos cargar los profesionales. Revisa Firestore y tus permisos.'
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (!userLocation || !professionals.length) return;
+
+    const updatedProfessionals = enrichProfessionalsWithDistance(professionals, userLocation);
+    setProfessionals(updatedProfessionals);
+  }, [userLocation]);
+
+  const filterProfessionals = (text, category) => {
+    let result = [...professionals];
+
+    if (text.trim()) {
+      const query = text.toLowerCase();
+      result = result.filter(
+        (item) =>
+          item.name?.toLowerCase().includes(query) ||
+          item.specialty?.toLowerCase().includes(query)
+      );
+    }
+
+    if (category) {
+      result = result.filter(
+        (item) => item.specialty?.toLowerCase() === category.toLowerCase()
+      );
+    }
+
+    if (userLocation) {
+      result = [...result].sort(
+        (a, b) => (a.distanceKm || Infinity) - (b.distanceKm || Infinity)
+      );
+    }
+
+    setFilteredProfessionals(result);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      Alert.alert('Error', 'No pudimos cerrar sesión.');
+    }
+  };
+
+  const handleCategoryPress = (category) => {
+    setSelectedCategory((prev) => (prev === category ? '' : category));
+  };
+
+  const openProfile = () => {
+    navigation.navigate('Profile');
+  };
+
+  const openProfessionalDetail = (professional) => {
+    navigation.navigate('ProfessionalDetail', { professional });
+  };
+
+  const centerMapOnProfessional = (professional) => {
+    if (!mapRef.current) return;
+    if (
+      !professional.location ||
+      typeof professional.location.latitude !== 'number' ||
+      typeof professional.location.longitude !== 'number'
+    ) {
+      return;
+    }
+
+    mapRef.current.animateToRegion(
+      {
+        latitude: professional.location.latitude,
+        longitude: professional.location.longitude,
+        latitudeDelta: 0.015,
+        longitudeDelta: 0.015,
+      },
+      800
     );
   };
 
-  const renderProfessional = ({ item }) => (
-    <TouchableOpacity style={styles.simpleCard} activeOpacity={0.9}>
-      <View style={styles.simpleAvatar}>
-        <Text style={styles.simpleAvatarText}>
-          {item.name ? item.name.charAt(0).toUpperCase() : 'P'}
+  const formatDistance = (distanceKm) => {
+    if (distanceKm == null) return 'Distancia no disponible';
+    if (distanceKm < 1) return `A ${(distanceKm * 1000).toFixed(0)} m de ti`;
+    return `A ${distanceKm.toFixed(1)} km de ti`;
+  };
+
+  const renderProfessionalCard = (item) => (
+    <TouchableOpacity
+      key={item.id}
+      style={styles.professionalCard}
+      activeOpacity={0.9}
+      onPress={() => openProfessionalDetail(item)}
+    >
+      <View style={styles.professionalAvatar}>
+        <Text style={styles.professionalAvatarText}>
+          {item.name?.charAt(0)?.toUpperCase() || 'P'}
         </Text>
       </View>
 
-      <View style={styles.simpleInfo}>
-        <Text style={styles.simpleName}>
-          {item.name || 'Profesional'}
+      <View style={styles.professionalInfo}>
+        <Text style={styles.professionalName}>{item.name || 'Sin nombre'}</Text>
+        <Text style={styles.professionalSpecialty}>
+          {item.specialty || 'Especialidad no disponible'}
         </Text>
-        <Text style={styles.simpleSpecialty}>
-          {item.specialty || 'Especialidad'}
-        </Text>
-        <Text style={styles.simpleCity}>
-          {item.city || 'Santiago'}
-        </Text>
-      </View>
 
-      <Ionicons name="chevron-forward" size={18} color="#A3AAB7" />
+        <View style={styles.professionalMetaRow}>
+          <View style={styles.metaBadge}>
+            <Text style={styles.metaBadgeText}>Disponible</Text>
+          </View>
+          <Text style={styles.distanceText}>
+            {formatDistance(item.distanceKm)}
+          </Text>
+        </View>
+      </View>
     </TouchableOpacity>
   );
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <StatusBar barStyle="dark-content" />
-        <ActivityIndicator size="large" color="#3558D4" />
-      </SafeAreaView>
-    );
-  }
-
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-
-      <Modal
-        visible={menuVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setMenuVisible(false)}
+    <SafeAreaView style={styles.safe}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator={false}
       >
-        <View style={styles.menuOverlay}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setMenuVisible(false)}
-          />
+        <View style={styles.backgroundCircleTop} />
+        <View style={styles.backgroundCircleBottom} />
 
-          <View style={styles.menuWrapper}>
-            <Pressable style={styles.menuPanel}>
-              <View style={styles.menuHeader}>
-                <View style={styles.menuHeaderIcon}>
-                  <Ionicons name="person" size={20} color="#6B7BFF" />
-                </View>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.greeting}>Hola, {userName}</Text>
+            <Text style={styles.heading}>Encuentra ayuda médica cerca de ti</Text>
+          </View>
 
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.menuHeaderTitle}>Tu cuenta</Text>
-                  <Text style={styles.menuHeaderSubtitle}>
-                    Gestiona tus opciones y accesos
-                  </Text>
-                </View>
-              </View>
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.iconButton} onPress={openProfile}>
+              <Text style={styles.iconButtonText}>👤</Text>
+            </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setMenuVisible(false);
-                  navigation.navigate('Profile');
-                }}
-              >
-                <View style={styles.menuIconSoft}>
-                  <Ionicons name="person-outline" size={18} color="#7B8494" />
-                </View>
-                <View style={styles.menuTextWrap}>
-                  <Text style={styles.menuItemTitle}>Mi perfil</Text>
-                  <Text style={styles.menuItemSubtitle}>
-                    Tus datos y tu cuenta
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#A3AAB7" />
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.menuItem}>
-                <View style={styles.menuIconPink}>
-                  <Ionicons name="heart-outline" size={18} color="#D966A5" />
-                </View>
-                <View style={styles.menuTextWrap}>
-                  <Text style={styles.menuItemTitle}>Favoritos</Text>
-                  <Text style={styles.menuItemSubtitle}>
-                    Profesionales guardados
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#A3AAB7" />
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.menuItem}>
-                <View style={styles.menuIconGray}>
-                  <Ionicons name="settings-outline" size={18} color="#7B8494" />
-                </View>
-                <View style={styles.menuTextWrap}>
-                  <Text style={styles.menuItemTitle}>Configuración</Text>
-                  <Text style={styles.menuItemSubtitle}>
-                    Preferencias de la app
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#A3AAB7" />
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.menuItem}>
-                <View style={styles.menuIconGreen}>
-                  <Ionicons name="help-circle-outline" size={18} color="#52B788" />
-                </View>
-                <View style={styles.menuTextWrap}>
-                  <Text style={styles.menuItemTitle}>Ayuda</Text>
-                  <Text style={styles.menuItemSubtitle}>
-                    Soporte y preguntas frecuentes
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#A3AAB7" />
-              </TouchableOpacity>
-
-              <View style={styles.menuDivider} />
-
-              <TouchableOpacity
-                style={styles.logoutBtn}
-                onPress={handleLogout}
-                activeOpacity={0.9}
-              >
-                <View style={styles.logoutIcon}>
-                  <Ionicons name="log-out-outline" size={18} color="#D95F59" />
-                </View>
-                <Text style={styles.logoutBtnText}>Cerrar sesión</Text>
-              </TouchableOpacity>
-            </Pressable>
+            <TouchableOpacity style={styles.iconButton} onPress={handleLogout}>
+              <Text style={styles.iconButtonText}>↩</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
 
-      <View style={styles.header}>
-        <View style={styles.headerSpacer} />
+        <View style={styles.searchCard}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Buscar por nombre o especialidad"
+            placeholderTextColor="#94A3B8"
+            value={search}
+            onChangeText={setSearch}
+          />
+        </View>
 
-        <Text style={styles.headerTitle}>MedApp</Text>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Especialidades</Text>
+          {!!selectedCategory && (
+            <TouchableOpacity onPress={() => setSelectedCategory('')}>
+              <Text style={styles.clearText}>Limpiar</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
-        <TouchableOpacity
-          style={styles.headerMenuButton}
-          onPress={() => setMenuVisible(true)}
-          activeOpacity={0.85}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.categoriesList}
         >
-          <Ionicons name="grid-outline" size={22} color="#1F2937" />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.searchBox}>
-        <Ionicons name="search-outline" size={18} color="#9AA3AF" />
-        <TextInput
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Buscar profesional..."
-          placeholderTextColor="#9AA3AF"
-          style={styles.searchInput}
-        />
-      </View>
-
-      <View style={styles.mapContainer}>
-        <MapView style={styles.map} region={region}>
-          {filtered.map((item) => {
-            const lat = Number(item.latitude);
-            const lng = Number(item.longitude);
-
-            if (isNaN(lat) || isNaN(lng)) return null;
+          {CATEGORIES.map((item) => {
+            const active = selectedCategory === item;
 
             return (
-              <Marker
-                key={item.id}
-                coordinate={{ latitude: lat, longitude: lng }}
-                title={item.name || 'Profesional'}
-                description={item.specialty || 'Especialidad'}
-              />
+              <TouchableOpacity
+                key={item}
+                style={[styles.categoryChip, active && styles.categoryChipActive]}
+                onPress={() => handleCategoryPress(item)}
+              >
+                <Text style={[styles.categoryText, active && styles.categoryTextActive]}>
+                  {item}
+                </Text>
+              </TouchableOpacity>
             );
           })}
-        </MapView>
-      </View>
+        </ScrollView>
 
-      <View style={styles.chipsWrapper}>
-        {categories.map(renderChip)}
-      </View>
-
-      <View style={styles.listHeader}>
-        <Text style={styles.listHeaderTitle}>Profesionales cercanos</Text>
-        <Text style={styles.listHeaderSubtitle}>
-          {filtered.length} disponible{filtered.length === 1 ? '' : 's'}
-        </Text>
-      </View>
-
-      <FlatList
-        data={filtered}
-        keyExtractor={(item) => item.id}
-        renderItem={renderProfessional}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyBox}>
-            <Ionicons name="search-outline" size={34} color="#9AA3AF" />
-            <Text style={styles.emptyTitle}>No encontramos resultados</Text>
-            <Text style={styles.emptySubtitle}>
-              Intenta con otro nombre o especialidad.
+        <View style={styles.heroCard}>
+          <View style={styles.heroTextBlock}>
+            <Text style={styles.heroTitle}>Atención rápida y cercana</Text>
+            <Text style={styles.heroSubtitle}>
+              Explora profesionales confiables y encuentra la atención que necesitas.
             </Text>
           </View>
-        }
-      />
+
+          <View style={styles.heroBadge}>
+            <Text style={styles.heroBadgeText}>MedApp</Text>
+          </View>
+        </View>
+
+        <View style={styles.mapPreviewCard}>
+          <View style={styles.mapPreviewHeader}>
+            <Text style={styles.sectionTitle}>Mapa de atención</Text>
+          </View>
+
+          <View style={styles.realMapContainer}>
+            {userLocation ? (
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                initialRegion={userLocation}
+                showsUserLocation
+                showsMyLocationButton
+              >
+                {filteredProfessionals.map((prof) => (
+                  <Marker
+                    key={prof.id}
+                    coordinate={{
+                      latitude: prof.location.latitude,
+                      longitude: prof.location.longitude,
+                    }}
+                    title={prof.name || 'Profesional'}
+                    description={`${prof.specialty || 'Especialidad'} • ${formatDistance(
+                      prof.distanceKm
+                    )}`}
+                    onPress={() => centerMapOnProfessional(prof)}
+                  />
+                ))}
+              </MapView>
+            ) : (
+              <View style={styles.mapLoader}>
+                <ActivityIndicator size="large" color="#2563EB" />
+                <Text style={styles.loaderText}>Cargando mapa...</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {featuredProfessional && (
+          <View style={styles.featuredCard}>
+            <Text style={styles.featuredLabel}>Más cercano</Text>
+            <Text style={styles.featuredName}>{featuredProfessional.name}</Text>
+            <Text style={styles.featuredSpecialty}>
+              {featuredProfessional.specialty}
+            </Text>
+            <Text style={styles.featuredDistance}>
+              {formatDistance(featuredProfessional.distanceKm)}
+            </Text>
+
+            <View style={styles.featuredButtonsRow}>
+              <TouchableOpacity
+                style={styles.featuredGhostButton}
+                onPress={() => centerMapOnProfessional(featuredProfessional)}
+              >
+                <Text style={styles.featuredGhostButtonText}>Ver en mapa</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.featuredButton}
+                onPress={() => openProfessionalDetail(featuredProfessional)}
+              >
+                <Text style={styles.featuredButtonText}>Ver perfil</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Profesionales disponibles</Text>
+          <Text style={styles.counterText}>
+            {filteredProfessionals.length} resultado
+            {filteredProfessionals.length === 1 ? '' : 's'}
+          </Text>
+        </View>
+
+        {loading ? (
+          <View style={styles.loaderBox}>
+            <ActivityIndicator size="large" color="#2563EB" />
+            <Text style={styles.loaderText}>Cargando profesionales...</Text>
+          </View>
+        ) : filteredProfessionals.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>No encontramos resultados</Text>
+            <Text style={styles.emptySubtitle}>
+              Prueba con otra búsqueda o cambia la especialidad seleccionada.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.listWrapper}>
+            {filteredProfessionals.map((item) => renderProfessionalCard(item))}
+          </View>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
   container: {
-    flex: 1,
-    backgroundColor: '#F3F4F6',
-    paddingTop: 8,
+    padding: 20,
+    paddingBottom: 36,
   },
-
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: '#F3F4F6',
-    justifyContent: 'center',
-    alignItems: 'center',
+  backgroundCircleTop: {
+    position: 'absolute',
+    top: -40,
+    right: -40,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(37, 99, 235, 0.08)',
   },
-
+  backgroundCircleBottom: {
+    position: 'absolute',
+    bottom: 120,
+    left: -50,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(59, 130, 246, 0.05)',
+  },
   header: {
-    height: 56,
-    paddingHorizontal: 16,
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 22,
   },
-
-  headerSpacer: {
-    width: 36,
+  greeting: {
+    fontSize: 14,
+    color: '#64748B',
+    marginBottom: 6,
   },
-
-  headerTitle: {
+  heading: {
+    width: width * 0.58,
+    fontSize: 28,
+    lineHeight: 34,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  iconButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  iconButtonText: {
+    fontSize: 20,
+  },
+  searchCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
+    marginBottom: 20,
+  },
+  searchInput: {
+    height: 50,
+    fontSize: 15,
+    color: '#0F172A',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginVertical: 14,
+  },
+  sectionTitle: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#111827',
+    color: '#0F172A',
   },
-
-  headerMenuButton: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
+  clearText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#2563EB',
   },
-
-  searchBox: {
-    marginTop: 8,
-    marginHorizontal: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    height: 48,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
+  categoriesList: {
+    paddingBottom: 8,
   },
-
-  searchInput: {
-    flex: 1,
-    marginLeft: 10,
-    color: '#172033',
-    fontSize: 14,
-  },
-
-  mapContainer: {
-    marginTop: 12,
-    marginHorizontal: 16,
-    height: 165,
-    borderRadius: 18,
-    overflow: 'hidden',
-    backgroundColor: '#E5E7EB',
-  },
-
-  map: {
-    flex: 1,
-  },
-
-  chipsWrapper: {
-    flexDirection: 'row',
+  categoryChip: {
+    backgroundColor: '#E2E8F0',
     paddingHorizontal: 16,
-    marginTop: 14,
-    marginBottom: 8,
-  },
-
-  chip: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 18,
+    paddingVertical: 12,
+    borderRadius: 16,
     marginRight: 10,
   },
-
-  chipActive: {
-    backgroundColor: '#3558D4',
+  categoryChipActive: {
+    backgroundColor: '#2563EB',
   },
-
-  chipText: {
-    color: '#4A5160',
-    fontSize: 13,
+  categoryText: {
+    color: '#334155',
     fontWeight: '700',
+    fontSize: 13,
   },
-
-  chipTextActive: {
+  categoryTextActive: {
     color: '#FFFFFF',
   },
-
-  listHeader: {
-    paddingHorizontal: 16,
-    marginTop: 10,
-    marginBottom: 12,
+  heroCard: {
+    marginTop: 14,
+    backgroundColor: '#2563EB',
+    borderRadius: 24,
+    padding: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    overflow: 'hidden',
   },
-
-  listHeaderTitle: {
+  heroTextBlock: {
+    flex: 1,
+    paddingRight: 14,
+  },
+  heroTitle: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  heroSubtitle: {
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  heroBadge: {
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  heroBadgeText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  mapPreviewCard: {
+    marginTop: 18,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 18,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  mapPreviewHeader: {
+    marginBottom: 14,
+  },
+  realMapContainer: {
+    height: 260,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#DBEAFE',
+  },
+  map: {
+    width: '100%',
+    height: '100%',
+  },
+  mapLoader: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  featuredCard: {
+    marginTop: 18,
+    backgroundColor: '#0F172A',
+    borderRadius: 24,
+    padding: 20,
+  },
+  featuredLabel: {
+    color: '#93C5FD',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+  },
+  featuredName: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  featuredSpecialty: {
+    color: '#CBD5E1',
+    fontSize: 14,
+    marginBottom: 6,
+  },
+  featuredDistance: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  featuredButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  featuredGhostButton: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  featuredGhostButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  featuredButton: {
+    flex: 1,
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  featuredButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  counterText: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  loaderBox: {
+    paddingVertical: 34,
+    alignItems: 'center',
+  },
+  loaderText: {
+    marginTop: 12,
+    color: '#64748B',
+    fontSize: 14,
+  },
+  emptyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 22,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  emptyTitle: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#172033',
+    color: '#0F172A',
+    marginBottom: 8,
   },
-
-  listHeaderSubtitle: {
-    marginTop: 3,
-    fontSize: 13,
-    color: '#8A94A6',
-  },
-
-  listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 28,
-  },
-
-  simpleCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 14,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  simpleAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#3558D4',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-
-  simpleAvatarText: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 15,
-  },
-
-  simpleInfo: {
-    flex: 1,
-  },
-
-  simpleName: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#172033',
-    marginBottom: 3,
-  },
-
-  simpleSpecialty: {
-    fontSize: 13,
-    color: '#5F6878',
-    marginBottom: 2,
-  },
-
-  simpleCity: {
-    fontSize: 12,
-    color: '#8A94A6',
-  },
-
-  emptyBox: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 22,
-    padding: 24,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-
-  emptyTitle: {
-    marginTop: 10,
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#172033',
-  },
-
   emptySubtitle: {
-    marginTop: 6,
     fontSize: 14,
-    color: '#8A94A6',
+    lineHeight: 20,
+    color: '#64748B',
     textAlign: 'center',
   },
-
-  menuOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.10)',
+  listWrapper: {
+    marginTop: 2,
   },
-
-  menuWrapper: {
-    paddingTop: 108,
-    paddingHorizontal: 24,
-    alignItems: 'flex-end',
-  },
-
-  menuPanel: {
-    width: 285,
-    backgroundColor: '#F8F7FA',
-    borderRadius: 28,
-    padding: 14,
-  },
-
-  menuHeader: {
+  professionalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    padding: 16,
+    marginBottom: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingTop: 6,
-    paddingBottom: 14,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
   },
-
-  menuHeaderIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#EBF0FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-
-  menuHeaderTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#172033',
-  },
-
-  menuHeaderSubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: '#8A94A6',
-  },
-
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 11,
-    paddingHorizontal: 8,
-  },
-
-  menuTextWrap: {
-    flex: 1,
-    marginLeft: 12,
-  },
-
-  menuItemTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#172033',
-  },
-
-  menuItemSubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: '#8A94A6',
-  },
-
-  menuIconSoft: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#EEF1F7',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  menuIconPink: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#FBEAF4',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  menuIconGray: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#F1F2F4',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  menuIconGreen: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#EAF8F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  menuDivider: {
-    height: 1,
-    backgroundColor: '#E7E8ED',
-    marginVertical: 8,
-    marginHorizontal: 6,
-  },
-
-  logoutBtn: {
-    height: 56,
+  professionalAvatar: {
+    width: 58,
+    height: 58,
     borderRadius: 18,
-    backgroundColor: '#FCEEEE',
-    flexDirection: 'row',
+    backgroundColor: '#2563EB',
     alignItems: 'center',
-    paddingHorizontal: 12,
-  },
-
-  logoutIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#FFF7F6',
     justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
+    marginRight: 14,
   },
-
-  logoutBtnText: {
-    color: '#C94E46',
-    fontSize: 16,
+  professionalAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 22,
     fontWeight: '800',
+  },
+  professionalInfo: {
+    flex: 1,
+  },
+  professionalName: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 4,
+  },
+  professionalSpecialty: {
+    fontSize: 14,
+    color: '#64748B',
+    marginBottom: 10,
+  },
+  professionalMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  metaBadge: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  metaBadgeText: {
+    color: '#166534',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  distanceText: {
+    color: '#2563EB',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

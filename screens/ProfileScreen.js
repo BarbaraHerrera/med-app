@@ -1,5 +1,3 @@
-// screens/ProfileScreen.js
-
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
@@ -15,8 +13,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../firebaseConfig';
-import { signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { signOut, updateProfile } from 'firebase/auth';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 export default function ProfileScreen({ navigation }) {
   const user = auth.currentUser;
@@ -50,7 +48,6 @@ export default function ProfileScreen({ navigation }) {
     try {
       if (!user?.uid) {
         Alert.alert('Error', 'No se encontró el usuario autenticado.');
-        setLoading(false);
         return;
       }
 
@@ -59,8 +56,9 @@ export default function ProfileScreen({ navigation }) {
 
       if (snap.exists()) {
         const data = snap.data();
+
         setProfile({
-          fullName: data.fullName || '',
+          fullName: data.fullName || user.displayName || '',
           email: user.email || '',
           phone: data.phone || '',
           city: data.city || '',
@@ -69,16 +67,19 @@ export default function ProfileScreen({ navigation }) {
         });
       } else {
         const initialData = {
+          uid: user.uid,
           fullName: user.displayName || '',
           email: user.email || '',
           phone: '',
           city: '',
           specialty: '',
           about: '',
-          createdAt: new Date(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         };
 
-        await setDoc(ref, initialData);
+        await setDoc(ref, initialData, { merge: true });
+
         setProfile({
           fullName: initialData.fullName,
           email: initialData.email,
@@ -103,55 +104,69 @@ export default function ProfileScreen({ navigation }) {
     }));
   };
 
+  const handleCancelEdit = async () => {
+    setEditMode(false);
+    await loadProfile();
+  };
+
   const handleSave = async () => {
+    if (!user?.uid) {
+      Alert.alert('Error', 'No se encontró el usuario autenticado.');
+      return;
+    }
+
+    const cleanFullName = profile.fullName.trim();
+    const cleanPhone = profile.phone.trim();
+    const cleanCity = profile.city.trim();
+    const cleanSpecialty = profile.specialty.trim();
+    const cleanAbout = profile.about.trim();
+
+    if (!cleanFullName) {
+      Alert.alert('Campo requerido', 'Por favor ingresa tu nombre.');
+      return;
+    }
+
     try {
-      if (!user?.uid) return;
-
-      if (!profile.fullName.trim()) {
-        Alert.alert('Campo requerido', 'Por favor ingresa tu nombre.');
-        return;
-      }
-
       setSaving(true);
 
+      // 1) Actualizar nombre en Firebase Auth
+      await updateProfile(user, {
+        displayName: cleanFullName,
+      });
+
+      // 2) Guardar perfil en Firestore
       const ref = doc(db, 'users', user.uid);
 
-      await updateDoc(ref, {
-        fullName: profile.fullName.trim(),
-        phone: profile.phone.trim(),
-        city: profile.city.trim(),
-        specialty: profile.specialty.trim(),
-        about: profile.about.trim(),
-        updatedAt: new Date(),
-      });
+      await setDoc(
+        ref,
+        {
+          uid: user.uid,
+          fullName: cleanFullName,
+          email: user.email || profile.email || '',
+          phone: cleanPhone,
+          city: cleanCity,
+          specialty: cleanSpecialty,
+          about: cleanAbout,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      setProfile((prev) => ({
+        ...prev,
+        fullName: cleanFullName,
+        email: user.email || prev.email,
+        phone: cleanPhone,
+        city: cleanCity,
+        specialty: cleanSpecialty,
+        about: cleanAbout,
+      }));
 
       setEditMode(false);
       Alert.alert('Éxito', 'Tu perfil fue actualizado correctamente.');
     } catch (error) {
       console.log('Error al guardar perfil:', error);
-
-      try {
-        const ref = doc(db, 'users', user.uid);
-        await setDoc(
-          ref,
-          {
-            fullName: profile.fullName.trim(),
-            email: profile.email.trim(),
-            phone: profile.phone.trim(),
-            city: profile.city.trim(),
-            specialty: profile.specialty.trim(),
-            about: profile.about.trim(),
-            updatedAt: new Date(),
-          },
-          { merge: true }
-        );
-
-        setEditMode(false);
-        Alert.alert('Éxito', 'Tu perfil fue guardado correctamente.');
-      } catch (err) {
-        console.log('Error secundario al guardar perfil:', err);
-        Alert.alert('Error', 'No pudimos guardar los cambios.');
-      }
+      Alert.alert('Error', 'No pudimos guardar los cambios.');
     } finally {
       setSaving(false);
     }
@@ -176,7 +191,11 @@ export default function ProfileScreen({ navigation }) {
   };
 
   const renderField = (label, key, placeholder, options = {}) => {
-    const { multiline = false, keyboardType = 'default' } = options;
+    const {
+      multiline = false,
+      keyboardType = 'default',
+      editableOverride = editMode,
+    } = options;
 
     return (
       <View style={styles.fieldContainer}>
@@ -186,13 +205,13 @@ export default function ProfileScreen({ navigation }) {
           onChangeText={(text) => handleChange(key, text)}
           placeholder={placeholder}
           placeholderTextColor="#94A3B8"
-          editable={editMode}
+          editable={editableOverride}
           multiline={multiline}
           keyboardType={keyboardType}
           style={[
             styles.input,
             multiline && styles.textArea,
-            !editMode && styles.inputDisabled,
+            !editableOverride && styles.inputDisabled,
           ]}
         />
       </View>
@@ -224,8 +243,7 @@ export default function ProfileScreen({ navigation }) {
             style={styles.editButton}
             onPress={() => {
               if (editMode) {
-                setEditMode(false);
-                loadProfile();
+                handleCancelEdit();
               } else {
                 setEditMode(true);
               }
@@ -257,7 +275,10 @@ export default function ProfileScreen({ navigation }) {
           <Text style={styles.sectionTitle}>Información personal</Text>
 
           {renderField('Nombre completo', 'fullName', 'Ingresa tu nombre')}
-          {renderField('Correo electrónico', 'email', 'Tu correo')}
+          {renderField('Correo electrónico', 'email', 'Tu correo', {
+            keyboardType: 'email-address',
+            editableOverride: false,
+          })}
           {renderField('Teléfono', 'phone', 'Ingresa tu teléfono', {
             keyboardType: 'phone-pad',
           })}
@@ -266,30 +287,10 @@ export default function ProfileScreen({ navigation }) {
           {renderField('Sobre mí', 'about', 'Cuéntanos un poco sobre ti', {
             multiline: true,
           })}
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Opciones</Text>
-
-          <TouchableOpacity style={styles.optionCard}>
-            <View style={styles.optionLeft}>
-              <View style={styles.optionIcon}>
-                <Ionicons name="notifications-outline" size={18} color="#2563EB" />
-              </View>
-              <Text style={styles.optionText}>Notificaciones</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.optionCard}>
-            <View style={styles.optionLeft}>
-              <View style={styles.optionIcon}>
-                <Ionicons name="lock-closed-outline" size={18} color="#2563EB" />
-              </View>
-              <Text style={styles.optionText}>Privacidad y seguridad</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
-          </TouchableOpacity>
+          <Text style={styles.helperText}>
+            El correo no se edita desde aquí por seguridad.
+          </Text>
         </View>
 
         {editMode && (
@@ -468,31 +469,10 @@ const styles = StyleSheet.create({
     minHeight: 110,
     textAlignVertical: 'top',
   },
-  optionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EEF2F7',
-  },
-  optionLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  optionIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  optionText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#0F172A',
+  helperText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#64748B',
   },
   saveButton: {
     backgroundColor: '#2563EB',

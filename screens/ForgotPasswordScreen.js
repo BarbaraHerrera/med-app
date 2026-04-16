@@ -4,16 +4,14 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
   StyleSheet,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
   ActivityIndicator,
-  TouchableWithoutFeedback,
-  Keyboard,
-  SafeAreaView,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
 
@@ -22,41 +20,31 @@ export default function ForgotPasswordScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
 
   const handleResetPassword = async () => {
-    const cleanEmail = email.trim().toLowerCase();
-
-    if (!cleanEmail) {
-      Alert.alert('Correo requerido', 'Por favor ingresa tu correo electrónico.');
-      return;
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(cleanEmail)) {
-      Alert.alert('Correo inválido', 'Ingresa un correo electrónico válido.');
+    if (!email.trim()) {
+      Alert.alert('Campo requerido', 'Ingresa tu correo electrónico.');
       return;
     }
 
     try {
       setLoading(true);
-      await sendPasswordResetEmail(auth, cleanEmail);
-
+      await sendPasswordResetEmail(auth, email.trim());
       Alert.alert(
         'Correo enviado',
-        'Te enviamos un enlace para restablecer tu contraseña. Revisa tu bandeja de entrada y spam.'
+        'Te enviamos un enlace para restablecer tu contraseña.'
       );
-
-      setEmail('');
+      navigation.goBack();
     } catch (error) {
-      let message = 'No se pudo enviar el correo de recuperación. Intenta nuevamente.';
+      let message = 'No pudimos enviar el correo. Inténtalo nuevamente.';
 
-      if (error.code === 'auth/user-not-found') {
-        message = 'No existe una cuenta asociada a ese correo.';
-      } else if (error.code === 'auth/invalid-email') {
-        message = 'El correo ingresado no es válido.';
+      if (error.code === 'auth/invalid-email') {
+        message = 'El correo no tiene un formato válido.';
+      } else if (error.code === 'auth/user-not-found') {
+        message = 'No encontramos una cuenta con ese correo.';
       } else if (error.code === 'auth/too-many-requests') {
-        message = 'Demasiados intentos. Espera un momento e inténtalo otra vez.';
+        message = 'Demasiados intentos. Espera unos minutos e inténtalo otra vez.';
       }
 
-      Alert.alert('Ups', message);
+      Alert.alert('Error', message);
     } finally {
       setLoading(false);
     }
@@ -64,34 +52,33 @@ export default function ForgotPasswordScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <KeyboardAvoidingView
-          style={styles.container}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="chevron-back" size={22} color="#1E293B" />
-          </TouchableOpacity>
+          <View style={styles.topGlow} />
 
           <View style={styles.card}>
-            <View style={styles.iconWrapper}>
-              <Ionicons name="lock-closed" size={34} color="#2563EB" />
+            <View style={styles.logoCircle}>
+              <Text style={styles.logoText}>+</Text>
             </View>
 
-            <Text style={styles.title}>¿Olvidaste tu contraseña?</Text>
+            <Text style={styles.title}>Recupera tu acceso</Text>
             <Text style={styles.subtitle}>
-              No te preocupes. Ingresa tu correo y te enviaremos un enlace para recuperarla.
+              Ingresa tu correo y te enviaremos un enlace para restablecer tu
+              contraseña de forma segura.
             </Text>
 
-            <View style={styles.inputContainer}>
-              <Ionicons name="mail-outline" size={20} color="#64748B" style={styles.inputIcon} />
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Correo electrónico</Text>
               <TextInput
                 style={styles.input}
-                placeholder="Ingresa tu correo"
+                placeholder="tucorreo@email.com"
                 placeholderTextColor="#94A3B8"
                 keyboardType="email-address"
                 autoCapitalize="none"
@@ -102,35 +89,27 @@ export default function ForgotPasswordScreen({ navigation }) {
             </View>
 
             <TouchableOpacity
-              style={[styles.button, loading && styles.buttonDisabled]}
+              style={[styles.primaryButton, loading && styles.disabledButton]}
               onPress={handleResetPassword}
               disabled={loading}
-              activeOpacity={0.85}
             >
               {loading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <>
-                  <Text style={styles.buttonText}>Enviar enlace</Text>
-                  <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
-                </>
+                <Text style={styles.primaryButtonText}>Enviar enlace</Text>
               )}
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.secondaryButton}
               onPress={() => navigation.goBack()}
-              activeOpacity={0.8}
+              disabled={loading}
             >
-              <Text style={styles.secondaryButtonText}>Volver al inicio de sesión</Text>
+              <Text style={styles.secondaryButtonText}>Volver al login</Text>
             </TouchableOpacity>
           </View>
-
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>MedApp • Recuperación segura</Text>
-          </View>
-        </KeyboardAvoidingView>
-      </TouchableWithoutFeedback>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -138,124 +117,109 @@ export default function ForgotPasswordScreen({ navigation }) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#F8FAFC',
   },
-  container: {
+  flex: {
     flex: 1,
-    paddingHorizontal: 24,
-    justifyContent: 'center',
   },
-  backButton: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 20 : 30,
-    left: 24,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
+  scroll: {
+    flexGrow: 1,
     justifyContent: 'center',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 4,
-    zIndex: 10,
+    padding: 24,
+  },
+  topGlow: {
+    position: 'absolute',
+    top: 80,
+    alignSelf: 'center',
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: 'rgba(37, 99, 235, 0.08)',
   },
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 28,
     padding: 24,
     shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 14 },
     shadowOpacity: 0.08,
-    shadowRadius: 24,
+    shadowRadius: 20,
     elevation: 6,
   },
-  iconWrapper: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#DBEAFE',
+  logoCircle: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    backgroundColor: '#2563EB',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
     marginBottom: 18,
+  },
+  logoText: {
+    color: '#FFFFFF',
+    fontSize: 34,
+    fontWeight: '800',
   },
   title: {
     fontSize: 28,
     fontWeight: '800',
     color: '#0F172A',
     textAlign: 'center',
-    marginBottom: 10,
   },
   subtitle: {
-    fontSize: 15,
-    lineHeight: 22,
+    marginTop: 8,
+    marginBottom: 24,
+    fontSize: 14,
+    lineHeight: 21,
     color: '#64748B',
     textAlign: 'center',
-    marginBottom: 28,
-    paddingHorizontal: 8,
   },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    paddingHorizontal: 14,
-    height: 58,
+  inputGroup: {
     marginBottom: 18,
   },
-  inputIcon: {
-    marginRight: 10,
+  label: {
+    marginBottom: 8,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
   },
   input: {
-    flex: 1,
-    color: '#0F172A',
+    height: 54,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    backgroundColor: '#F8FAFC',
     fontSize: 15,
+    color: '#0F172A',
   },
-  button: {
-    height: 58,
-    borderRadius: 18,
+  primaryButton: {
+    height: 56,
+    borderRadius: 16,
     backgroundColor: '#2563EB',
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-    shadowColor: '#2563EB',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 5,
+    marginBottom: 12,
   },
-  buttonDisabled: {
-    opacity: 0.75,
+  disabledButton: {
+    opacity: 0.7,
   },
-  buttonText: {
+  primaryButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   secondaryButton: {
-    marginTop: 18,
+    height: 56,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
   },
   secondaryButtonText: {
-    color: '#2563EB',
-    fontSize: 14,
+    color: '#0F172A',
+    fontSize: 15,
     fontWeight: '700',
-  },
-  footer: {
-    marginTop: 22,
-    alignItems: 'center',
-  },
-  footerText: {
-    color: '#94A3B8',
-    fontSize: 13,
   },
 });
