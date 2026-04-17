@@ -30,10 +30,22 @@ export default function ProfessionalDetailScreen({ route, navigation }) {
     );
   }
 
+  const professionalName =
+    professional.fullName || professional.name || 'Profesional';
+
   const latitude =
-    typeof professional.latitude === 'number' ? professional.latitude : -33.4489;
+    typeof professional?.location?.latitude === 'number'
+      ? professional.location.latitude
+      : typeof professional?.latitude === 'number'
+      ? professional.latitude
+      : -33.4489;
+
   const longitude =
-    typeof professional.longitude === 'number' ? professional.longitude : -70.6693;
+    typeof professional?.location?.longitude === 'number'
+      ? professional.location.longitude
+      : typeof professional?.longitude === 'number'
+      ? professional.longitude
+      : -70.6693;
 
   const region = {
     latitude,
@@ -53,16 +65,20 @@ export default function ProfessionalDetailScreen({ route, navigation }) {
     }
   };
 
-  const handleBook = () => {
-    Alert.alert(
-      'Próximamente',
-      'Aquí conectaremos el agendamiento de horas en el siguiente paso.'
-    );
-  };
+    const handleBook = () => {
+      navigation.navigate('Booking', { professional });
+    };
+
+  const modalitiesText = Array.isArray(professional.modalities) && professional.modalities.length
+    ? professional.modalities.join(', ')
+    : 'Presencial';
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.backgroundCircleTop} />
         <View style={styles.backgroundCircleBottom} />
 
@@ -81,17 +97,19 @@ export default function ProfessionalDetailScreen({ route, navigation }) {
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>
-              {professional.name?.charAt(0)?.toUpperCase() || 'P'}
+              {professionalName.charAt(0)?.toUpperCase() || 'P'}
             </Text>
           </View>
 
-          <Text style={styles.name}>{professional.name || 'Profesional'}</Text>
+          <Text style={styles.name}>{professionalName}</Text>
           <Text style={styles.specialty}>
             {professional.specialty || 'Especialidad no disponible'}
           </Text>
 
           <View style={styles.statusBadge}>
-            <Text style={styles.statusBadgeText}>Disponible</Text>
+            <Text style={styles.statusBadgeText}>
+              {professional.isActive === false ? 'Inactivo' : 'Disponible'}
+            </Text>
           </View>
         </View>
 
@@ -103,7 +121,7 @@ export default function ProfessionalDetailScreen({ route, navigation }) {
 
           <View style={styles.infoCard}>
             <Text style={styles.infoLabel}>Modalidad</Text>
-            <Text style={styles.infoValue}>{professional.mode || 'Presencial'}</Text>
+            <Text style={styles.infoValue}>{modalitiesText}</Text>
           </View>
 
           <View style={styles.infoCard}>
@@ -135,7 +153,7 @@ export default function ProfessionalDetailScreen({ route, navigation }) {
             <MapView style={styles.map} initialRegion={region}>
               <Marker
                 coordinate={{ latitude, longitude }}
-                title={professional.name || 'Profesional'}
+                title={professionalName}
                 description={professional.specialty || 'Especialidad'}
               />
             </MapView>

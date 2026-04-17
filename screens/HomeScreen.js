@@ -16,6 +16,7 @@ import * as Location from 'expo-location';
 import { signOut } from 'firebase/auth';
 import { collection, getDocs } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
+import { addToHistory } from '../services/historyService';
 
 const { width } = Dimensions.get('window');
 
@@ -27,6 +28,9 @@ const CATEGORIES = [
   'Médico General',
 ];
 
+const getProfessionalName = (professional) =>
+  professional?.fullName || professional?.name || 'Profesional';
+
 export default function HomeScreen({ navigation }) {
   const [professionals, setProfessionals] = useState([]);
   const [filteredProfessionals, setFilteredProfessionals] = useState([]);
@@ -37,7 +41,10 @@ export default function HomeScreen({ navigation }) {
 
   const mapRef = useRef(null);
 
-  const userName = auth.currentUser?.email?.split('@')[0] || 'Usuario';
+  const userName =
+    auth.currentUser?.displayName ||
+    auth.currentUser?.email?.split('@')[0] ||
+    'Usuario';
 
   useEffect(() => {
     loadInitialData();
@@ -122,6 +129,18 @@ export default function HomeScreen({ navigation }) {
 
     return items
       .map((item) => {
+        const hasValidLocation =
+          item.location &&
+          typeof item.location.latitude === 'number' &&
+          typeof item.location.longitude === 'number';
+
+        if (!hasValidLocation) {
+          return {
+            ...item,
+            distanceKm: null,
+          };
+        }
+
         const distanceKm = getDistanceInKm(
           location.latitude,
           location.longitude,
@@ -134,15 +153,16 @@ export default function HomeScreen({ navigation }) {
           distanceKm,
         };
       })
-      .sort((a, b) => a.distanceKm - b.distanceKm);
+      .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
   };
 
   const loadProfessionals = async () => {
     try {
       const querySnapshot = await getDocs(collection(db, 'professionals'));
-      const data = querySnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
+
+      const data = querySnapshot.docs.map((docItem) => ({
+        id: docItem.id,
+        ...docItem.data(),
       }));
 
       const validData = data.filter(
@@ -168,7 +188,10 @@ export default function HomeScreen({ navigation }) {
   useEffect(() => {
     if (!userLocation || !professionals.length) return;
 
-    const updatedProfessionals = enrichProfessionalsWithDistance(professionals, userLocation);
+    const updatedProfessionals = enrichProfessionalsWithDistance(
+      professionals,
+      userLocation
+    );
     setProfessionals(updatedProfessionals);
   }, [userLocation]);
 
@@ -177,11 +200,17 @@ export default function HomeScreen({ navigation }) {
 
     if (text.trim()) {
       const query = text.toLowerCase();
-      result = result.filter(
-        (item) =>
-          item.name?.toLowerCase().includes(query) ||
-          item.specialty?.toLowerCase().includes(query)
-      );
+      result = result.filter((item) => {
+        const fullName = item.fullName?.toLowerCase() || '';
+        const name = item.name?.toLowerCase() || '';
+        const specialty = item.specialty?.toLowerCase() || '';
+
+        return (
+          fullName.includes(query) ||
+          name.includes(query) ||
+          specialty.includes(query)
+        );
+      });
     }
 
     if (category) {
@@ -192,7 +221,7 @@ export default function HomeScreen({ navigation }) {
 
     if (userLocation) {
       result = [...result].sort(
-        (a, b) => (a.distanceKm || Infinity) - (b.distanceKm || Infinity)
+        (a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity)
       );
     }
 
@@ -215,8 +244,26 @@ export default function HomeScreen({ navigation }) {
     navigation.navigate('Profile');
   };
 
-  const openProfessionalDetail = (professional) => {
-    navigation.navigate('ProfessionalDetail', { professional });
+  const openHistory = () => {
+    navigation.navigate('History');
+  };
+
+  const openAppointments = () => {
+    navigation.navigate('PatientAppointments');
+  };
+
+  const openProfessionalDetail = async (professional) => {
+    try {
+      await addToHistory({
+        professionalId: professional.id,
+        type: 'view',
+        title: getProfessionalName(professional),
+      });
+    } catch (error) {
+      console.log('Error guardando historial:', error);
+    } finally {
+      navigation.navigate('ProfessionalDetail', { professional });
+    }
   };
 
   const centerMapOnProfessional = (professional) => {
@@ -246,36 +293,40 @@ export default function HomeScreen({ navigation }) {
     return `A ${distanceKm.toFixed(1)} km de ti`;
   };
 
-  const renderProfessionalCard = (item) => (
-    <TouchableOpacity
-      key={item.id}
-      style={styles.professionalCard}
-      activeOpacity={0.9}
-      onPress={() => openProfessionalDetail(item)}
-    >
-      <View style={styles.professionalAvatar}>
-        <Text style={styles.professionalAvatarText}>
-          {item.name?.charAt(0)?.toUpperCase() || 'P'}
-        </Text>
-      </View>
+  const renderProfessionalCard = (item) => {
+    const professionalName = getProfessionalName(item);
 
-      <View style={styles.professionalInfo}>
-        <Text style={styles.professionalName}>{item.name || 'Sin nombre'}</Text>
-        <Text style={styles.professionalSpecialty}>
-          {item.specialty || 'Especialidad no disponible'}
-        </Text>
-
-        <View style={styles.professionalMetaRow}>
-          <View style={styles.metaBadge}>
-            <Text style={styles.metaBadgeText}>Disponible</Text>
-          </View>
-          <Text style={styles.distanceText}>
-            {formatDistance(item.distanceKm)}
+    return (
+      <TouchableOpacity
+        key={item.id}
+        style={styles.professionalCard}
+        activeOpacity={0.9}
+        onPress={() => openProfessionalDetail(item)}
+      >
+        <View style={styles.professionalAvatar}>
+          <Text style={styles.professionalAvatarText}>
+            {professionalName.charAt(0)?.toUpperCase() || 'P'}
           </Text>
         </View>
-      </View>
-    </TouchableOpacity>
-  );
+
+        <View style={styles.professionalInfo}>
+          <Text style={styles.professionalName}>{professionalName}</Text>
+          <Text style={styles.professionalSpecialty}>
+            {item.specialty || 'Especialidad no disponible'}
+          </Text>
+
+          <View style={styles.professionalMetaRow}>
+            <View style={styles.metaBadge}>
+              <Text style={styles.metaBadgeText}>Disponible</Text>
+            </View>
+            <Text style={styles.distanceText}>
+              {formatDistance(item.distanceKm)}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -293,6 +344,14 @@ export default function HomeScreen({ navigation }) {
           </View>
 
           <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.iconButton} onPress={openAppointments}>
+              <Text style={styles.iconButtonText}>🕘</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.iconButton} onPress={openHistory}>
+              <Text style={styles.iconButtonText}>📋</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.iconButton} onPress={openProfile}>
               <Text style={styles.iconButtonText}>👤</Text>
             </TouchableOpacity>
@@ -378,7 +437,7 @@ export default function HomeScreen({ navigation }) {
                       latitude: prof.location.latitude,
                       longitude: prof.location.longitude,
                     }}
-                    title={prof.name || 'Profesional'}
+                    title={getProfessionalName(prof)}
                     description={`${prof.specialty || 'Especialidad'} • ${formatDistance(
                       prof.distanceKm
                     )}`}
@@ -398,9 +457,11 @@ export default function HomeScreen({ navigation }) {
         {featuredProfessional && (
           <View style={styles.featuredCard}>
             <Text style={styles.featuredLabel}>Más cercano</Text>
-            <Text style={styles.featuredName}>{featuredProfessional.name}</Text>
+            <Text style={styles.featuredName}>
+              {getProfessionalName(featuredProfessional)}
+            </Text>
             <Text style={styles.featuredSpecialty}>
-              {featuredProfessional.specialty}
+              {featuredProfessional.specialty || 'Especialidad no disponible'}
             </Text>
             <Text style={styles.featuredDistance}>
               {formatDistance(featuredProfessional.distanceKm)}
@@ -493,7 +554,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   heading: {
-    width: width * 0.58,
+    width: width * 0.45,
     fontSize: 28,
     lineHeight: 34,
     fontWeight: '800',
@@ -502,6 +563,9 @@ const styles = StyleSheet.create({
   headerActions: {
     flexDirection: 'row',
     gap: 10,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    width: width * 0.38,
   },
   iconButton: {
     width: 46,
@@ -516,7 +580,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   iconButtonText: {
-    fontSize: 20,
+    fontSize: 18,
   },
   searchCard: {
     backgroundColor: '#FFFFFF',

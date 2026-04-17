@@ -24,7 +24,7 @@ export default function SplashScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [fadeAnim, scaleAnim]);
 
   return (
     <View style={styles.container}>
@@ -37,7 +37,6 @@ export default function SplashScreen() {
           },
         ]}
       >
-        {/* Logo círculo */}
         <View style={styles.logoCircle}>
           <Text style={styles.logoText}>+</Text>
         </View>
@@ -64,6 +63,7 @@ const styles = StyleSheet.create({
   },
   content: {
     alignItems: 'center',
+    paddingHorizontal: 24,
   },
   logoCircle: {
     width: 90,
@@ -76,6 +76,7 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.2,
     shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
     elevation: 6,
   },
   logoText: {
