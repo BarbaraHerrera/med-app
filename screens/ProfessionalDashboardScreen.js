@@ -1,3 +1,4 @@
+// /screens/ProfessionalDashboardScreen.js
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
@@ -9,11 +10,13 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import MapView, { Marker } from 'react-native-maps';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import {
   collection,
-  onSnapshot,
   query,
   where,
+  onSnapshot,
   doc,
   updateDoc,
   serverTimestamp,
@@ -23,7 +26,9 @@ import { auth, db } from '../firebaseConfig';
 
 export default function ProfessionalDashboardScreen({ navigation }) {
   const [appointments, setAppointments] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [professionalData, setProfessionalData] = useState(null);
+  const [loadingAppointments, setLoadingAppointments] = useState(true);
+  const [loadingProfile, setLoadingProfile] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
 
   const uid = auth.currentUser?.uid;
@@ -31,13 +36,45 @@ export default function ProfessionalDashboardScreen({ navigation }) {
   useEffect(() => {
     if (!uid) return;
 
-    const q = query(
+    const professionalQuery = query(
+      collection(db, 'professionals'),
+      where('userId', '==', uid)
+    );
+
+    const unsubscribeProfessional = onSnapshot(
+      professionalQuery,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const docItem = snapshot.docs[0];
+          setProfessionalData({
+            id: docItem.id,
+            ...docItem.data(),
+          });
+        } else {
+          setProfessionalData(null);
+        }
+        setLoadingProfile(false);
+      },
+      (error) => {
+        console.log('Error cargando perfil profesional:', error);
+        Alert.alert('Error', 'No pudimos cargar tu perfil profesional.');
+        setLoadingProfile(false);
+      }
+    );
+
+    return unsubscribeProfessional;
+  }, [uid]);
+
+  useEffect(() => {
+    if (!uid) return;
+
+    const appointmentsQuery = query(
       collection(db, 'appointments'),
       where('professionalId', '==', uid)
     );
 
-    const unsubscribe = onSnapshot(
-      q,
+    const unsubscribeAppointments = onSnapshot(
+      appointmentsQuery,
       (snapshot) => {
         const data = snapshot.docs
           .map((docItem) => ({
@@ -51,16 +88,16 @@ export default function ProfessionalDashboardScreen({ navigation }) {
           });
 
         setAppointments(data);
-        setLoading(false);
+        setLoadingAppointments(false);
       },
       (error) => {
         console.log('Error leyendo citas del profesional:', error);
         Alert.alert('Error', 'No pudimos cargar las citas.');
-        setLoading(false);
+        setLoadingAppointments(false);
       }
     );
 
-    return unsubscribe;
+    return unsubscribeAppointments;
   }, [uid]);
 
   const stats = useMemo(() => {
@@ -81,10 +118,19 @@ export default function ProfessionalDashboardScreen({ navigation }) {
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
-      console.log('Error actualizando estado:', error);
-      Alert.alert('Error', 'No pudimos actualizar el estado.');
+      console.log('Error actualizando estado de cita:', error);
+      Alert.alert('Error', 'No pudimos actualizar el estado de la cita.');
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.log('Error cerrando sesión:', error);
+      Alert.alert('Error', 'No pudimos cerrar sesión.');
     }
   };
 
@@ -103,61 +149,206 @@ export default function ProfessionalDashboardScreen({ navigation }) {
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.log('Error cerrando sesión:', error);
-      Alert.alert('Error', 'No pudimos cerrar sesión.');
+  const getStatusLabel = (status) => {
+    switch (status) {
+      case 'confirmed':
+        return 'Confirmada';
+      case 'pending':
+        return 'Pendiente';
+      case 'cancelled':
+        return 'Cancelada';
+      case 'completed':
+        return 'Completada';
+      default:
+        return 'Pendiente';
     }
   };
 
+  const latitude = professionalData?.location?.latitude;
+  const longitude = professionalData?.location?.longitude;
+
+  const hasValidLocation =
+    typeof latitude === 'number' &&
+    typeof longitude === 'number' &&
+    !Number.isNaN(latitude) &&
+    !Number.isNaN(longitude);
+
+  const initialRegion = hasValidLocation
+    ? {
+        latitude,
+        longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }
+    : {
+        latitude: -33.4489,
+        longitude: -70.6693,
+        latitudeDelta: 0.08,
+        longitudeDelta: 0.08,
+      };
+
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.topRow}>
-          <View>
+          <View style={{ flex: 1, paddingRight: 12 }}>
             <Text style={styles.topLabel}>Panel profesional</Text>
-            <Text style={styles.topTitle}>Gestión de citas</Text>
+            <Text style={styles.topTitle}>Tu dashboard</Text>
+            <Text style={styles.topSubtitle}>
+              Administra tus citas, revisa tu ubicación y accede rápido a tu perfil.
+            </Text>
           </View>
 
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+            <Ionicons name="log-out-outline" size={18} color="#344054" />
             <Text style={styles.logoutText}>Salir</Text>
           </TouchableOpacity>
         </View>
 
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.pending}</Text>
-            <Text style={styles.statLabel}>Pendientes</Text>
+        <View style={styles.heroCard}>
+          <View style={styles.heroHeaderRow}>
+            <View style={styles.avatarCircle}>
+              <Ionicons name="medical-outline" size={28} color="#2563EB" />
+            </View>
+
+            <View style={styles.heroTextWrap}>
+              <Text style={styles.heroName}>
+                {professionalData?.name ||
+                  professionalData?.fullName ||
+                  'Profesional'}
+              </Text>
+              <Text style={styles.heroSpecialty}>
+                {professionalData?.specialty || 'Especialidad no disponible'}
+              </Text>
+              <Text style={styles.heroMeta}>
+                {professionalData?.address || 'Dirección no disponible'}
+              </Text>
+            </View>
           </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.confirmed}</Text>
-            <Text style={styles.statLabel}>Confirmadas</Text>
+
+          <View style={styles.heroActions}>
+            <TouchableOpacity
+              style={styles.primaryHeroButton}
+              onPress={() => navigation.navigate('ProfessionalScreen')}
+            >
+              <Ionicons name="person-outline" size={18} color="#2563EB" />
+              <Text style={styles.primaryHeroButtonText}>Mi perfil profesional</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.secondaryHeroButton}
+              onPress={() => navigation.navigate('ProfessionalProfile')}
+            >
+              <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.secondaryHeroButtonText}>Editar perfil</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
-        <View style={styles.statsRow}>
+        <View style={styles.statsGrid}>
           <View style={styles.statCard}>
+            <View style={[styles.statIconWrap, { backgroundColor: '#FEF3C7' }]}>
+              <Ionicons name="time-outline" size={18} color="#D97706" />
+            </View>
+            <Text style={styles.statNumber}>{stats.pending}</Text>
+            <Text style={styles.statLabel}>Pendientes</Text>
+          </View>
+
+          <View style={styles.statCard}>
+            <View style={[styles.statIconWrap, { backgroundColor: '#DCFCE7' }]}>
+              <Ionicons name="checkmark-circle-outline" size={18} color="#16A34A" />
+            </View>
+            <Text style={styles.statNumber}>{stats.confirmed}</Text>
+            <Text style={styles.statLabel}>Confirmadas</Text>
+          </View>
+
+          <View style={styles.statCard}>
+            <View style={[styles.statIconWrap, { backgroundColor: '#E0F2FE' }]}>
+              <MaterialIcons name="task-alt" size={18} color="#0284C7" />
+            </View>
             <Text style={styles.statNumber}>{stats.completed}</Text>
             <Text style={styles.statLabel}>Completadas</Text>
           </View>
+
           <View style={styles.statCard}>
+            <View style={[styles.statIconWrap, { backgroundColor: '#FEE2E2' }]}>
+              <Ionicons name="close-circle-outline" size={18} color="#DC2626" />
+            </View>
             <Text style={styles.statNumber}>{stats.cancelled}</Text>
             <Text style={styles.statLabel}>Canceladas</Text>
           </View>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Solicitudes y atenciones</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Tu ubicación en el mapa</Text>
 
-          {loading ? (
+            <TouchableOpacity
+              style={styles.miniActionButton}
+              onPress={() => navigation.navigate('ProfessionalScreen')}
+            >
+              <Text style={styles.miniActionButtonText}>Ver perfil</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.mapCard}>
+            {loadingProfile ? (
+              <View style={styles.mapFallback}>
+                <ActivityIndicator color="#2563EB" />
+                <Text style={styles.mapFallbackText}>Cargando ubicación...</Text>
+              </View>
+            ) : hasValidLocation ? (
+              <MapView style={styles.map} initialRegion={initialRegion}>
+                <Marker
+                  coordinate={{
+                    latitude,
+                    longitude,
+                  }}
+                  title={
+                    professionalData?.name ||
+                    professionalData?.fullName ||
+                    'Profesional'
+                  }
+                  description={
+                    professionalData?.specialty || 'Especialidad no disponible'
+                  }
+                />
+              </MapView>
+            ) : (
+              <View style={styles.mapFallback}>
+                <Text style={styles.mapFallbackTitle}>Sin ubicación registrada</Text>
+                <Text style={styles.mapFallbackText}>
+                  Agrega latitude y longitude en tu perfil profesional para que
+                  aparezca el mapa.
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Gestión de citas</Text>
+
+            <TouchableOpacity
+              style={styles.profileButtonSmall}
+              onPress={() => navigation.navigate('ProfessionalProfile')}
+            >
+              <Text style={styles.profileButtonSmallText}>Mi perfil</Text>
+            </TouchableOpacity>
+          </View>
+
+          {loadingAppointments ? (
             <ActivityIndicator color="#2563EB" style={{ marginTop: 20 }} />
           ) : appointments.length === 0 ? (
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>Aún no tienes citas registradas</Text>
               <Text style={styles.emptyText}>
-                Las solicitudes que hagan tus pacientes aparecerán aquí.
+                Cuando un paciente agende una hora, aparecerá aquí para que la
+                puedas gestionar.
               </Text>
             </View>
           ) : (
@@ -168,17 +359,34 @@ export default function ProfessionalDashboardScreen({ navigation }) {
                     {item.patientName || 'Paciente'}
                   </Text>
 
-                  <View style={[styles.statusBadge, getStatusBadgeStyle(item.status)]}>
-                    <Text style={styles.statusText}>{item.status || 'pending'}</Text>
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      getStatusBadgeStyle(item.status),
+                    ]}
+                  >
+                    <Text style={styles.statusText}>
+                      {getStatusLabel(item.status)}
+                    </Text>
                   </View>
                 </View>
 
-                <Text style={styles.info}>📧 {item.patientEmail || 'Sin correo'}</Text>
-                <Text style={styles.info}>🩺 {item.specialty || 'Sin especialidad'}</Text>
-                <Text style={styles.info}>📅 {item.appointmentDate || 'Sin fecha'}</Text>
-                <Text style={styles.info}>⏰ {item.appointmentTime || 'Sin hora'}</Text>
+                <Text style={styles.info}>
+                  📧 {item.patientEmail || 'Correo no disponible'}
+                </Text>
+                <Text style={styles.info}>
+                  🩺 {item.specialty || 'Especialidad no disponible'}
+                </Text>
+                <Text style={styles.info}>
+                  📅 {item.appointmentDate || 'Sin fecha'}
+                </Text>
+                <Text style={styles.info}>
+                  ⏰ {item.appointmentTime || 'Sin hora'}
+                </Text>
 
-                {!!item.notes && <Text style={styles.info}>📝 {item.notes}</Text>}
+                {!!item.notes && (
+                  <Text style={styles.info}>📝 {item.notes}</Text>
+                )}
 
                 <View style={styles.actionsWrap}>
                   <TouchableOpacity
@@ -209,13 +417,6 @@ export default function ProfessionalDashboardScreen({ navigation }) {
             ))
           )}
         </View>
-
-        <TouchableOpacity
-          style={styles.profileButton}
-          onPress={() => navigation.navigate('ProfessionalProfile')}
-        >
-          <Text style={styles.profileButtonText}>Ir a mi perfil profesional</Text>
-        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -233,47 +434,151 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 18,
+    gap: 12,
   },
   topLabel: {
     color: '#2563EB',
     fontSize: 12,
     fontWeight: '800',
     textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   topTitle: {
     marginTop: 4,
     color: '#101828',
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: '800',
+  },
+  topSubtitle: {
+    marginTop: 6,
+    color: '#667085',
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 21,
   },
   logoutButton: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderWidth: 1,
     borderColor: '#E4E7EC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   logoutText: {
     color: '#344054',
     fontWeight: '800',
+    fontSize: 14,
   },
-  statsRow: {
+  heroCard: {
+    backgroundColor: '#2563EB',
+    borderRadius: 28,
+    padding: 22,
+    marginBottom: 20,
+    shadowColor: '#2563EB',
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
+  },
+  heroHeaderRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  avatarCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  heroTextWrap: {
+    flex: 1,
+  },
+  heroName: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '800',
+  },
+  heroSpecialty: {
+    marginTop: 6,
+    color: '#E0EAFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  heroMeta: {
+    marginTop: 8,
+    color: '#DBEAFE',
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 21,
+  },
+  heroActions: {
+    marginTop: 18,
+    gap: 10,
+  },
+  primaryHeroButton: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  primaryHeroButtonText: {
+    color: '#2563EB',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  secondaryHeroButton: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 16,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  secondaryHeroButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginBottom: 14,
-    gap: 12,
+    marginBottom: 18,
   },
   statCard: {
-    flex: 1,
+    width: '48%',
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    borderRadius: 22,
     paddingVertical: 20,
+    paddingHorizontal: 14,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#EEF2F6',
+    marginBottom: 12,
+  },
+  statIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
   },
   statNumber: {
     fontSize: 24,
@@ -287,13 +592,74 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   section: {
-    marginTop: 8,
+    marginTop: 4,
+    marginBottom: 18,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 12,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: '#101828',
-    marginBottom: 12,
+  },
+  miniActionButton: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  miniActionButtonText: {
+    color: '#2563EB',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  profileButtonSmall: {
+    backgroundColor: '#0F172A',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  profileButtonSmallText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  mapCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#EEF2F6',
+  },
+  map: {
+    width: '100%',
+    height: 260,
+  },
+  mapFallback: {
+    height: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: '#FFFFFF',
+  },
+  mapFallbackTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#101828',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  mapFallbackText: {
+    fontSize: 14,
+    color: '#667085',
+    textAlign: 'center',
+    lineHeight: 21,
+    marginTop: 8,
   },
   emptyCard: {
     backgroundColor: '#FFFFFF',
@@ -315,7 +681,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
@@ -363,7 +729,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#344054',
-    textTransform: 'capitalize',
   },
   actionsWrap: {
     flexDirection: 'row',
@@ -389,17 +754,5 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 13,
-  },
-  profileButton: {
-    marginTop: 16,
-    backgroundColor: '#0F172A',
-    borderRadius: 18,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  profileButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '800',
   },
 });
