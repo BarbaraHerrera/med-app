@@ -1,3 +1,4 @@
+// /screens/PatientAppointmentsScreen.js
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
@@ -24,7 +25,11 @@ export default function PatientAppointmentsScreen({ navigation }) {
   const uid = auth.currentUser?.uid;
 
   useEffect(() => {
-    if (!uid) return;
+    if (!uid) {
+      setAppointments([]);
+      setLoading(false);
+      return;
+    }
 
     const q = query(
       collection(db, 'appointments'),
@@ -82,6 +87,21 @@ export default function PatientAppointmentsScreen({ navigation }) {
     }
   };
 
+  const getStatusLabel = (status) => {
+    switch (status) {
+      case 'confirmed':
+        return 'Confirmada';
+      case 'pending':
+        return 'Pendiente';
+      case 'cancelled':
+        return 'Cancelada';
+      case 'completed':
+        return 'Completada';
+      default:
+        return 'Pendiente';
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
@@ -91,7 +111,7 @@ export default function PatientAppointmentsScreen({ navigation }) {
         <View style={styles.headerRow}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => navigation.goBack()}
+            onPress={() => navigation.navigate('Home')}
           >
             <Text style={styles.backButtonText}>← Volver</Text>
           </TouchableOpacity>
@@ -156,7 +176,7 @@ export default function PatientAppointmentsScreen({ navigation }) {
                     ]}
                   >
                     <Text style={styles.statusText}>
-                      {item.status || 'pending'}
+                      {getStatusLabel(item.status)}
                     </Text>
                   </View>
                 </View>
@@ -363,7 +383,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#344054',
-    textTransform: 'capitalize',
   },
   statusDescription: {
     marginTop: 10,

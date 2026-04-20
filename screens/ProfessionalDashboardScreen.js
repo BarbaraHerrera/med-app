@@ -8,46 +8,25 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { signOut } from 'firebase/auth';
 import {
   collection,
-  doc,
   onSnapshot,
   query,
   where,
+  doc,
   updateDoc,
   serverTimestamp,
 } from 'firebase/firestore';
+import { signOut } from 'firebase/auth';
 import { auth, db } from '../firebaseConfig';
 
 export default function ProfessionalDashboardScreen({ navigation }) {
-  const [profile, setProfile] = useState(null);
   const [appointments, setAppointments] = useState([]);
-  const [loadingProfile, setLoadingProfile] = useState(true);
-  const [loadingAppointments, setLoadingAppointments] = useState(true);
+  const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
 
   const uid = auth.currentUser?.uid;
-
-  useEffect(() => {
-    if (!uid) return;
-
-    const unsubscribeProfile = onSnapshot(
-      doc(db, 'professionals', uid),
-      (snapshot) => {
-        setProfile(snapshot.exists() ? snapshot.data() : null);
-        setLoadingProfile(false);
-      },
-      (error) => {
-        console.log('Error perfil profesional:', error);
-        setLoadingProfile(false);
-      }
-    );
-
-    return unsubscribeProfile;
-  }, [uid]);
 
   useEffect(() => {
     if (!uid) return;
@@ -57,7 +36,7 @@ export default function ProfessionalDashboardScreen({ navigation }) {
       where('professionalId', '==', uid)
     );
 
-    const unsubscribeAppointments = onSnapshot(
+    const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         const data = snapshot.docs
@@ -72,60 +51,38 @@ export default function ProfessionalDashboardScreen({ navigation }) {
           });
 
         setAppointments(data);
-        setLoadingAppointments(false);
+        setLoading(false);
       },
       (error) => {
-        console.log('Error leyendo appointments:', error);
-        setAppointments([]);
-        setLoadingAppointments(false);
+        console.log('Error leyendo citas del profesional:', error);
+        Alert.alert('Error', 'No pudimos cargar las citas.');
+        setLoading(false);
       }
     );
 
-    return unsubscribeAppointments;
+    return unsubscribe;
   }, [uid]);
 
   const stats = useMemo(() => {
-    const pending = appointments.filter((a) => a.status === 'pending').length;
-    const confirmed = appointments.filter((a) => a.status === 'confirmed').length;
-    const completed = appointments.filter((a) => a.status === 'completed').length;
-    const todayDate = new Date().toISOString().split('T')[0];
-    const today = appointments.filter((a) => a.appointmentDate === todayDate).length;
-
-    return { pending, confirmed, completed, today };
+    return {
+      pending: appointments.filter((a) => a.status === 'pending').length,
+      confirmed: appointments.filter((a) => a.status === 'confirmed').length,
+      completed: appointments.filter((a) => a.status === 'completed').length,
+      cancelled: appointments.filter((a) => a.status === 'cancelled').length,
+    };
   }, [appointments]);
 
-  const mapRegion = useMemo(() => {
-    const lat = profile?.location?.latitude || -33.4489;
-    const lng = profile?.location?.longitude || -70.6693;
-
-    return {
-      latitude: lat,
-      longitude: lng,
-      latitudeDelta: 0.08,
-      longitudeDelta: 0.08,
-    };
-  }, [profile]);
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.log('Error cerrando sesión:', error);
-      Alert.alert('Error', 'No pudimos cerrar sesión.');
-    }
-  };
-
-  const handleUpdateAppointmentStatus = async (appointmentId, newStatus) => {
+  const updateStatus = async (appointmentId, status) => {
     try {
       setUpdatingId(appointmentId);
 
       await updateDoc(doc(db, 'appointments', appointmentId), {
-        status: newStatus,
+        status,
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
-      console.log('Error actualizando cita:', error);
-      Alert.alert('Error', 'No pudimos actualizar la cita.');
+      console.log('Error actualizando estado:', error);
+      Alert.alert('Error', 'No pudimos actualizar el estado.');
     } finally {
       setUpdatingId(null);
     }
@@ -146,23 +103,22 @@ export default function ProfessionalDashboardScreen({ navigation }) {
     }
   };
 
-  const nextAppointments = appointments.slice(0, 8);
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.log('Error cerrando sesión:', error);
+      Alert.alert('Error', 'No pudimos cerrar sesión.');
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.hero}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.welcome}>Panel profesional</Text>
-            <Text style={styles.name}>
-              {loadingProfile ? 'Cargando...' : profile?.fullName || 'Profesional'}
-            </Text>
-            <Text style={styles.specialty}>
-              {profile?.specialty || 'Completa tu especialidad en tu perfil'}
-            </Text>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.topRow}>
+          <View>
+            <Text style={styles.topLabel}>Panel profesional</Text>
+            <Text style={styles.topTitle}>Gestión de citas</Text>
           </View>
 
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -172,213 +128,94 @@ export default function ProfessionalDashboardScreen({ navigation }) {
 
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.today}</Text>
-            <Text style={styles.statLabel}>Hoy</Text>
-          </View>
-
-          <View style={styles.statCard}>
             <Text style={styles.statNumber}>{stats.pending}</Text>
             <Text style={styles.statLabel}>Pendientes</Text>
           </View>
-
           <View style={styles.statCard}>
             <Text style={styles.statNumber}>{stats.confirmed}</Text>
             <Text style={styles.statLabel}>Confirmadas</Text>
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Accesos rápidos</Text>
-
-          <View style={styles.quickActionsRow}>
-            <TouchableOpacity
-              style={styles.quickAction}
-              onPress={() => navigation.navigate('ProfessionalProfile')}
-            >
-              <Text style={styles.quickEmoji}>👤</Text>
-              <Text style={styles.quickText}>Mi perfil</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.quickAction}
-              onPress={() => navigation.navigate('History')}
-            >
-              <Text style={styles.quickEmoji}>📋</Text>
-              <Text style={styles.quickText}>Historial</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.quickAction}>
-              <Text style={styles.quickEmoji}>✅</Text>
-              <Text style={styles.quickText}>Citas</Text>
-            </TouchableOpacity>
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <Text style={styles.statNumber}>{stats.completed}</Text>
+            <Text style={styles.statLabel}>Completadas</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statNumber}>{stats.cancelled}</Text>
+            <Text style={styles.statLabel}>Canceladas</Text>
           </View>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Agenda y pacientes</Text>
+          <Text style={styles.sectionTitle}>Solicitudes y atenciones</Text>
 
-          {loadingAppointments ? (
-            <ActivityIndicator color="#2D6CDF" style={{ marginTop: 18 }} />
-          ) : nextAppointments.length === 0 ? (
+          {loading ? (
+            <ActivityIndicator color="#2563EB" style={{ marginTop: 20 }} />
+          ) : appointments.length === 0 ? (
             <View style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>Aún no tienes reservas</Text>
+              <Text style={styles.emptyTitle}>Aún no tienes citas registradas</Text>
               <Text style={styles.emptyText}>
-                Cuando un paciente agende, aparecerá aquí automáticamente.
+                Las solicitudes que hagan tus pacientes aparecerán aquí.
               </Text>
             </View>
           ) : (
-            nextAppointments.map((item) => {
-              const isUpdating = updatingId === item.id;
-              const isPending = item.status === 'pending';
-              const isConfirmed = item.status === 'confirmed';
-
-              return (
-                <View key={item.id} style={styles.appointmentCard}>
-                  <View style={styles.appointmentHeader}>
-                    <Text style={styles.patientName}>
-                      {item.patientName || 'Paciente sin nombre'}
-                    </Text>
-
-                    <View
-                      style={[
-                        styles.statusBadge,
-                        getStatusBadgeStyle(item.status),
-                      ]}
-                    >
-                      <Text style={styles.statusText}>
-                        {item.status || 'pending'}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <Text style={styles.appointmentInfo}>
-                    📅 {item.appointmentDate || 'Sin fecha'}
+            appointments.map((item) => (
+              <View key={item.id} style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <Text style={styles.patientName}>
+                    {item.patientName || 'Paciente'}
                   </Text>
-                  <Text style={styles.appointmentInfo}>
-                    ⏰ {item.appointmentTime || 'Sin hora'}
-                  </Text>
-                  <Text style={styles.appointmentInfo}>
-                    🩺 {item.specialty || profile?.specialty || 'Atención'}
-                  </Text>
-                  {!!item.notes && (
-                    <Text style={styles.appointmentInfo}>
-                      📝 {item.notes}
-                    </Text>
-                  )}
 
-                  <View style={styles.actionsWrap}>
-                    {isPending && (
-                      <>
-                        <TouchableOpacity
-                          style={[
-                            styles.actionButton,
-                            styles.confirmButton,
-                            isUpdating && styles.disabledButton,
-                          ]}
-                          onPress={() =>
-                            handleUpdateAppointmentStatus(item.id, 'confirmed')
-                          }
-                          disabled={isUpdating}
-                        >
-                          <Text style={styles.actionButtonText}>Confirmar</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.actionButton,
-                            styles.cancelButton,
-                            isUpdating && styles.disabledButton,
-                          ]}
-                          onPress={() =>
-                            handleUpdateAppointmentStatus(item.id, 'cancelled')
-                          }
-                          disabled={isUpdating}
-                        >
-                          <Text style={styles.actionButtonText}>Cancelar</Text>
-                        </TouchableOpacity>
-                      </>
-                    )}
-
-                    {isConfirmed && (
-                      <>
-                        <TouchableOpacity
-                          style={[
-                            styles.actionButton,
-                            styles.completeButton,
-                            isUpdating && styles.disabledButton,
-                          ]}
-                          onPress={() =>
-                            handleUpdateAppointmentStatus(item.id, 'completed')
-                          }
-                          disabled={isUpdating}
-                        >
-                          <Text style={styles.actionButtonText}>Completar</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.actionButton,
-                            styles.cancelButton,
-                            isUpdating && styles.disabledButton,
-                          ]}
-                          onPress={() =>
-                            handleUpdateAppointmentStatus(item.id, 'cancelled')
-                          }
-                          disabled={isUpdating}
-                        >
-                          <Text style={styles.actionButtonText}>Cancelar</Text>
-                        </TouchableOpacity>
-                      </>
-                    )}
-
-                    {isUpdating && (
-                      <View style={styles.inlineLoader}>
-                        <ActivityIndicator color="#2D6CDF" />
-                      </View>
-                    )}
+                  <View style={[styles.statusBadge, getStatusBadgeStyle(item.status)]}>
+                    <Text style={styles.statusText}>{item.status || 'pending'}</Text>
                   </View>
                 </View>
-              );
-            })
+
+                <Text style={styles.info}>📧 {item.patientEmail || 'Sin correo'}</Text>
+                <Text style={styles.info}>🩺 {item.specialty || 'Sin especialidad'}</Text>
+                <Text style={styles.info}>📅 {item.appointmentDate || 'Sin fecha'}</Text>
+                <Text style={styles.info}>⏰ {item.appointmentTime || 'Sin hora'}</Text>
+
+                {!!item.notes && <Text style={styles.info}>📝 {item.notes}</Text>}
+
+                <View style={styles.actionsWrap}>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.confirmBtn]}
+                    disabled={updatingId === item.id}
+                    onPress={() => updateStatus(item.id, 'confirmed')}
+                  >
+                    <Text style={styles.actionText}>Confirmar</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.completeBtn]}
+                    disabled={updatingId === item.id}
+                    onPress={() => updateStatus(item.id, 'completed')}
+                  >
+                    <Text style={styles.actionText}>Completar</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.cancelBtn]}
+                    disabled={updatingId === item.id}
+                    onPress={() => updateStatus(item.id, 'cancelled')}
+                  >
+                    <Text style={styles.actionText}>Cancelar</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
           )}
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Mapa profesional</Text>
-
-          <View style={styles.mapContainer}>
-            <MapView style={styles.map} initialRegion={mapRegion} region={mapRegion}>
-              <Marker
-                coordinate={{
-                  latitude: profile?.location?.latitude || -33.4489,
-                  longitude: profile?.location?.longitude || -70.6693,
-                }}
-                title={profile?.fullName || 'Mi ubicación profesional'}
-                description={profile?.specialty || 'Profesional de la salud'}
-              />
-
-              {appointments
-                .filter(
-                  (item) =>
-                    item.location &&
-                    typeof item.location.latitude === 'number' &&
-                    typeof item.location.longitude === 'number'
-                )
-                .slice(0, 10)
-                .map((item) => (
-                  <Marker
-                    key={`appt-${item.id}`}
-                    coordinate={{
-                      latitude: item.location.latitude,
-                      longitude: item.location.longitude,
-                    }}
-                    title={item.patientName || 'Paciente'}
-                    description={`${item.appointmentDate || ''} ${item.appointmentTime || ''}`}
-                  />
-                ))}
-            </MapView>
-          </View>
-        </View>
+        <TouchableOpacity
+          style={styles.profileButton}
+          onPress={() => navigation.navigate('ProfessionalProfile')}
+        >
+          <Text style={styles.profileButtonText}>Ir a mi perfil profesional</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -387,54 +224,50 @@ export default function ProfessionalDashboardScreen({ navigation }) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#F4F7FC',
+    backgroundColor: '#F8FAFC',
   },
   content: {
-    padding: 18,
-    paddingBottom: 30,
+    padding: 20,
+    paddingBottom: 36,
   },
-  hero: {
-    backgroundColor: '#2D6CDF',
-    borderRadius: 26,
-    padding: 22,
+  topRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 18,
   },
-  welcome: {
-    color: '#DCE8FF',
-    fontSize: 14,
-    fontWeight: '700',
+  topLabel: {
+    color: '#2563EB',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
   },
-  name: {
-    color: '#FFFFFF',
+  topTitle: {
+    marginTop: 4,
+    color: '#101828',
     fontSize: 24,
     fontWeight: '800',
-    marginTop: 6,
-  },
-  specialty: {
-    color: '#EAF1FF',
-    marginTop: 6,
-    fontSize: 14,
-    fontWeight: '600',
   },
   logoutButton: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E4E7EC',
   },
   logoutText: {
-    color: '#FFFFFF',
+    color: '#344054',
     fontWeight: '800',
   },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 18,
+    marginBottom: 14,
+    gap: 12,
   },
   statCard: {
-    width: '31.5%',
+    flex: 1,
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
     paddingVertical: 20,
@@ -443,45 +276,24 @@ const styles = StyleSheet.create({
     borderColor: '#EEF2F6',
   },
   statNumber: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: '800',
     color: '#101828',
   },
   statLabel: {
-    marginTop: 4,
+    marginTop: 6,
     color: '#667085',
     fontWeight: '700',
+    fontSize: 13,
   },
   section: {
-    marginBottom: 18,
+    marginTop: 8,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: '#101828',
     marginBottom: 12,
-  },
-  quickActionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  quickAction: {
-    width: '31.5%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    paddingVertical: 18,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#EEF2F6',
-  },
-  quickEmoji: {
-    fontSize: 24,
-    marginBottom: 8,
-  },
-  quickText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#344054',
   },
   emptyCard: {
     backgroundColor: '#FFFFFF',
@@ -501,7 +313,7 @@ const styles = StyleSheet.create({
     color: '#667085',
     lineHeight: 21,
   },
-  appointmentCard: {
+  card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 18,
     padding: 16,
@@ -509,7 +321,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#EEF2F6',
   },
-  appointmentHeader: {
+  cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -521,7 +333,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingRight: 10,
   },
-  appointmentInfo: {
+  info: {
     marginTop: 8,
     color: '#475467',
     fontSize: 14,
@@ -554,49 +366,40 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
   actionsWrap: {
-    marginTop: 14,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    alignItems: 'center',
+    marginTop: 14,
   },
-  actionButton: {
-    minWidth: 110,
-    height: 42,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+  actionBtn: {
+    borderRadius: 14,
     paddingHorizontal: 14,
+    paddingVertical: 10,
   },
-  confirmButton: {
+  confirmBtn: {
     backgroundColor: '#16A34A',
   },
-  cancelButton: {
+  completeBtn: {
+    backgroundColor: '#0284C7',
+  },
+  cancelBtn: {
     backgroundColor: '#DC2626',
   },
-  completeButton: {
-    backgroundColor: '#2563EB',
-  },
-  actionButtonText: {
+  actionText: {
     color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 13,
   },
-  inlineLoader: {
-    marginLeft: 4,
+  profileButton: {
+    marginTop: 16,
+    backgroundColor: '#0F172A',
+    borderRadius: 18,
+    paddingVertical: 16,
+    alignItems: 'center',
   },
-  disabledButton: {
-    opacity: 0.7,
-  },
-  mapContainer: {
-    borderRadius: 22,
-    overflow: 'hidden',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#EEF2F6',
-  },
-  map: {
-    width: '100%',
-    height: 280,
+  profileButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });

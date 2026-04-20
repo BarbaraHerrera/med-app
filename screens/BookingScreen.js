@@ -4,22 +4,16 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  TextInput,
   ScrollView,
   Alert,
-  TextInput,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  addDoc,
-  collection,
-  doc,
-  getDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 
-const HOURS = [
+const AVAILABLE_TIMES = [
   '09:00',
   '09:30',
   '10:00',
@@ -32,155 +26,138 @@ const HOURS = [
   '16:00',
   '16:30',
   '17:00',
-  '17:30',
-  '18:00',
 ];
 
-function getNextDays(count = 7) {
-  const days = [];
-  const now = new Date();
-
-  for (let i = 0; i < count; i++) {
-    const date = new Date(now);
-    date.setDate(now.getDate() + i);
-
-    const yyyy = date.getFullYear();
-    const mm = `${date.getMonth() + 1}`.padStart(2, '0');
-    const dd = `${date.getDate()}`.padStart(2, '0');
-
-    days.push({
-      label: `${dd}/${mm}`,
-      value: `${yyyy}-${mm}-${dd}`,
-    });
-  }
-
-  return days;
-}
+const AVAILABLE_DATES = [
+  '2026-04-20',
+  '2026-04-21',
+  '2026-04-22',
+  '2026-04-23',
+  '2026-04-24',
+];
 
 export default function BookingScreen({ route, navigation }) {
-  const { professional } = route.params || {};
-  const [selectedDate, setSelectedDate] = useState('');
-  const [selectedTime, setSelectedTime] = useState('');
+  const professional = route?.params?.professional || null;
+
+  const [selectedDate, setSelectedDate] = useState(AVAILABLE_DATES[0]);
+  const [selectedTime, setSelectedTime] = useState(null);
   const [notes, setNotes] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const availableDays = useMemo(() => getNextDays(7), []);
+  const canSubmit = useMemo(() => {
+    return !!professional && !!selectedDate && !!selectedTime && !loading;
+  }, [professional, selectedDate, selectedTime, loading]);
 
-  const professionalName =
-    professional?.fullName || professional?.name || 'Profesional';
+  const handleCreateAppointment = async () => {
+    if (!professional) {
+      Alert.alert('Error', 'No encontramos la información del profesional.');
+      return;
+    }
 
-  if (!professional) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.centered}>
-          <Text style={styles.errorTitle}>No encontramos al profesional</Text>
-          <TouchableOpacity
-            style={styles.primaryButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.primaryButtonText}>Volver</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+    if (!selectedTime) {
+      Alert.alert('Falta información', 'Selecciona una hora.');
+      return;
+    }
 
-  const handleConfirmBooking = async () => {
     try {
+      setLoading(true);
+
       const currentUser = auth.currentUser;
 
       if (!currentUser) {
-        Alert.alert('Error', 'Debes iniciar sesión.');
+        Alert.alert('Sesión expirada', 'Vuelve a iniciar sesión.');
         return;
       }
 
-      if (!selectedDate || !selectedTime) {
-        Alert.alert('Faltan datos', 'Selecciona una fecha y una hora.');
-        return;
+      let patientName = currentUser.displayName || 'Paciente';
+      let patientEmail = currentUser.email || '';
+
+      try {
+        const userSnap = await getDoc(doc(db, 'users', currentUser.uid));
+        if (userSnap.exists()) {
+          const userData = userSnap.data();
+          patientName =
+            userData?.fullName ||
+            userData?.name ||
+            currentUser.displayName ||
+            'Paciente';
+          patientEmail = userData?.email || currentUser.email || '';
+        }
+      } catch (e) {
+        console.log('No se pudo leer perfil del paciente:', e);
       }
-
-      setSaving(true);
-
-      const userRef = doc(db, 'users', currentUser.uid);
-      const userSnap = await getDoc(userRef);
-
-      const patientName = userSnap.exists()
-        ? userSnap.data()?.fullName ||
-          currentUser.displayName ||
-          currentUser.email?.split('@')[0] ||
-          'Paciente'
-        : currentUser.displayName ||
-          currentUser.email?.split('@')[0] ||
-          'Paciente';
 
       await addDoc(collection(db, 'appointments'), {
-        professionalId: professional.userId || professional.id,
         patientId: currentUser.uid,
-        professionalName,
         patientName,
-        specialty: professional.specialty || '',
+        patientEmail,
+        professionalId: professional.userId || professional.id,
+        professionalName: professional.name || professional.fullName || 'Profesional',
+        specialty: professional.specialty || 'Especialidad no disponible',
         appointmentDate: selectedDate,
         appointmentTime: selectedTime,
-        status: 'pending',
         notes: notes.trim(),
-        location: professional.location || null,
+        status: 'pending',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
 
-      Alert.alert('Hora agendada', 'Tu solicitud fue enviada correctamente.', [
-        {
-          text: 'OK',
-          onPress: () => navigation.goBack(),
-        },
-      ]);
+      Alert.alert(
+        'Cita agendada',
+        'Tu solicitud fue enviada correctamente.',
+        [
+          {
+            text: 'Ver mis citas',
+            onPress: () => navigation.replace('PatientAppointments'),
+          },
+        ]
+      );
     } catch (error) {
-      console.log('Error creando appointment:', error);
-      Alert.alert('Error', 'No pudimos agendar la hora.');
+      console.log('Error creando cita:', error);
+      Alert.alert('Error', 'No pudimos agendar la cita.');
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView
-        contentContainerStyle={styles.container}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.headerRow}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.backButtonText}>← Volver</Text>
-          </TouchableOpacity>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <Text style={styles.backText}>← Volver</Text>
+        </TouchableOpacity>
+
+        <View style={styles.hero}>
+          <Text style={styles.heroLabel}>Reserva</Text>
+          <Text style={styles.heroTitle}>Agenda tu cita</Text>
+          <Text style={styles.heroSubtitle}>
+            Confirma fecha, hora y agrega un motivo breve para la atención.
+          </Text>
         </View>
 
-        <View style={styles.heroCard}>
-          <Text style={styles.heroLabel}>Agendamiento</Text>
-          <Text style={styles.heroTitle}>{professionalName}</Text>
-          <Text style={styles.heroSubtitle}>
-            {professional.specialty || 'Especialidad no disponible'}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Profesional</Text>
+          <Text style={styles.professionalName}>
+            {professional?.name || professional?.fullName || 'Profesional'}
+          </Text>
+          <Text style={styles.professionalMeta}>
+            {professional?.specialty || 'Especialidad no disponible'}
           </Text>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Selecciona una fecha</Text>
-          <View style={styles.chipsRow}>
-            {availableDays.map((day) => {
-              const selected = selectedDate === day.value;
-
+          <View style={styles.optionsWrap}>
+            {AVAILABLE_DATES.map((date) => {
+              const active = selectedDate === date;
               return (
                 <TouchableOpacity
-                  key={day.value}
-                  style={[styles.chip, selected && styles.chipSelected]}
-                  onPress={() => setSelectedDate(day.value)}
+                  key={date}
+                  style={[styles.optionChip, active && styles.optionChipActive]}
+                  onPress={() => setSelectedDate(date)}
                 >
-                  <Text
-                    style={[styles.chipText, selected && styles.chipTextSelected]}
-                  >
-                    {day.label}
+                  <Text style={[styles.optionText, active && styles.optionTextActive]}>
+                    {date}
                   </Text>
                 </TouchableOpacity>
               );
@@ -190,20 +167,17 @@ export default function BookingScreen({ route, navigation }) {
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Selecciona una hora</Text>
-          <View style={styles.chipsRow}>
-            {HOURS.map((hour) => {
-              const selected = selectedTime === hour;
-
+          <View style={styles.optionsWrap}>
+            {AVAILABLE_TIMES.map((time) => {
+              const active = selectedTime === time;
               return (
                 <TouchableOpacity
-                  key={hour}
-                  style={[styles.chip, selected && styles.chipSelected]}
-                  onPress={() => setSelectedTime(hour)}
+                  key={time}
+                  style={[styles.optionChip, active && styles.optionChipActive]}
+                  onPress={() => setSelectedTime(time)}
                 >
-                  <Text
-                    style={[styles.chipText, selected && styles.chipTextSelected]}
-                  >
-                    {hour}
+                  <Text style={[styles.optionText, active && styles.optionTextActive]}>
+                    {time}
                   </Text>
                 </TouchableOpacity>
               );
@@ -212,27 +186,26 @@ export default function BookingScreen({ route, navigation }) {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Notas para el profesional</Text>
+          <Text style={styles.sectionTitle}>Motivo o notas</Text>
           <TextInput
             style={styles.textArea}
-            placeholder="Ej: Necesito control general, dolor de garganta, consulta inicial..."
-            placeholderTextColor="#98A2B3"
-            multiline
             value={notes}
             onChangeText={setNotes}
-            textAlignVertical="top"
+            placeholder="Ej: dolor de garganta, control general, consulta psicológica..."
+            placeholderTextColor="#98A2B3"
+            multiline
           />
         </View>
 
         <TouchableOpacity
-          style={[styles.primaryButton, saving && styles.disabledButton]}
-          onPress={handleConfirmBooking}
-          disabled={saving}
+          style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
+          disabled={!canSubmit}
+          onPress={handleCreateAppointment}
         >
-          {saving ? (
+          {loading ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
-            <Text style={styles.primaryButtonText}>Confirmar hora</Text>
+            <Text style={styles.submitButtonText}>Confirmar solicitud</Text>
           )}
         </TouchableOpacity>
       </ScrollView>
@@ -245,24 +218,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8FAFC',
   },
-  container: {
+  content: {
     padding: 20,
     paddingBottom: 36,
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  errorTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  headerRow: {
-    marginBottom: 14,
   },
   backButton: {
     alignSelf: 'flex-start',
@@ -272,13 +230,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderWidth: 1,
     borderColor: '#E4E7EC',
+    marginBottom: 14,
   },
-  backButtonText: {
+  backText: {
     color: '#344054',
     fontWeight: '800',
     fontSize: 14,
   },
-  heroCard: {
+  hero: {
     backgroundColor: '#2563EB',
     borderRadius: 24,
     padding: 22,
@@ -301,71 +260,83 @@ const styles = StyleSheet.create({
     color: '#E0EAFF',
     fontSize: 14,
     fontWeight: '600',
+    lineHeight: 21,
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 22,
+    borderRadius: 20,
     padding: 18,
-    marginBottom: 16,
     borderWidth: 1,
     borderColor: '#EEF2F6',
-  },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#101828',
     marginBottom: 14,
   },
-  chipsRow: {
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#101828',
+    marginBottom: 12,
+  },
+  professionalName: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#101828',
+  },
+  professionalMeta: {
+    marginTop: 6,
+    fontSize: 14,
+    color: '#667085',
+    fontWeight: '600',
+  },
+  optionsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
   },
-  chip: {
+  optionChip: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E4E7EC',
+    borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: '#F2F4F7',
-    borderWidth: 1,
-    borderColor: '#E4E7EC',
   },
-  chipSelected: {
-    backgroundColor: '#E8F0FF',
+  optionChipActive: {
+    backgroundColor: '#2563EB',
     borderColor: '#2563EB',
   },
-  chipText: {
+  optionText: {
     color: '#344054',
     fontWeight: '700',
-    fontSize: 13,
+    fontSize: 14,
   },
-  chipTextSelected: {
-    color: '#2563EB',
+  optionTextActive: {
+    color: '#FFFFFF',
   },
   textArea: {
-    minHeight: 120,
-    borderWidth: 1,
-    borderColor: '#E4E7EC',
+    minHeight: 110,
     borderRadius: 16,
-    backgroundColor: '#F9FAFB',
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    fontSize: 15,
+    borderWidth: 1,
+    borderColor: '#D0D5DD',
+    backgroundColor: '#FCFCFD',
+    padding: 14,
+    textAlignVertical: 'top',
     color: '#101828',
+    fontSize: 14,
+    fontWeight: '600',
   },
-  primaryButton: {
-    height: 56,
-    borderRadius: 18,
+  submitButton: {
+    marginTop: 8,
     backgroundColor: '#2563EB',
+    borderRadius: 18,
+    paddingVertical: 16,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 6,
   },
-  disabledButton: {
-    opacity: 0.7,
+  submitButtonDisabled: {
+    opacity: 0.6,
   },
-  primaryButtonText: {
+  submitButtonText: {
     color: '#FFFFFF',
-    fontWeight: '800',
     fontSize: 16,
+    fontWeight: '800',
   },
 });
