@@ -1,341 +1,250 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  TextInput,
   ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { addDoc, collection, doc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
-
-const AVAILABLE_TIMES = [
-  '09:00',
-  '09:30',
-  '10:00',
-  '10:30',
-  '11:00',
-  '11:30',
-  '12:00',
-  '15:00',
-  '15:30',
-  '16:00',
-  '16:30',
-  '17:00',
-];
-
-const AVAILABLE_DATES = [
-  '2026-04-20',
-  '2026-04-21',
-  '2026-04-22',
-  '2026-04-23',
-  '2026-04-24',
-];
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
+import {
+  scheduleLocalBookingNotification,
+  notifyProfessionalByProfessionalDocId,
+} from '../services/notifications';
 
 export default function BookingScreen({ route, navigation }) {
-  const professional = route?.params?.professional || null;
+  const { professional } = route.params || {};
 
-  const [selectedDate, setSelectedDate] = useState(AVAILABLE_DATES[0]);
-  const [selectedTime, setSelectedTime] = useState(null);
-  const [notes, setNotes] = useState('');
+  const [patientData, setPatientData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [selectedDate, setSelectedDate] = useState('');
+  const [selectedTime, setSelectedTime] = useState('');
+  const [reason, setReason] = useState('');
 
-  const canSubmit = useMemo(() => {
-    return !!professional && !!selectedDate && !!selectedTime && !loading;
-  }, [professional, selectedDate, selectedTime, loading]);
+  useEffect(() => {
+    loadPatientData();
+  }, []);
 
-  const handleCreateAppointment = async () => {
-    if (!professional) {
-      Alert.alert('Error', 'No encontramos la información del profesional.');
-      return;
-    }
-
-    if (!selectedTime) {
-      Alert.alert('Falta información', 'Selecciona una hora.');
-      return;
-    }
-
+  const loadPatientData = async () => {
     try {
-      setLoading(true);
+      const uid = auth.currentUser?.uid;
+      if (!uid) return;
 
-      const currentUser = auth.currentUser;
+      const userRef = doc(db, 'users', uid);
+      const userSnap = await getDoc(userRef);
 
-      if (!currentUser) {
-        Alert.alert('Sesión expirada', 'Vuelve a iniciar sesión.');
+      if (userSnap.exists()) {
+        setPatientData(userSnap.data());
+      }
+    } catch (error) {
+      console.log('Error cargando paciente:', error);
+    }
+  };
+
+  const handleBooking = async () => {
+    try {
+      if (!auth.currentUser?.uid || !professional?.id) {
+        Alert.alert('Error', 'Faltan datos para agendar.');
         return;
       }
 
-      let patientName = currentUser.displayName || 'Paciente';
-      let patientEmail = currentUser.email || '';
-
-      try {
-        const userSnap = await getDoc(doc(db, 'users', currentUser.uid));
-        if (userSnap.exists()) {
-          const userData = userSnap.data();
-          patientName =
-            userData?.fullName ||
-            userData?.name ||
-            currentUser.displayName ||
-            'Paciente';
-          patientEmail = userData?.email || currentUser.email || '';
-        }
-      } catch (e) {
-        console.log('No se pudo leer perfil del paciente:', e);
+      if (!selectedDate.trim() || !selectedTime.trim() || !reason.trim()) {
+        Alert.alert('Campos incompletos', 'Completa fecha, hora y motivo.');
+        return;
       }
 
-      await addDoc(collection(db, 'appointments'), {
-        patientId: currentUser.uid,
+      setLoading(true);
+
+      const patientId = auth.currentUser.uid;
+      const patientName =
+        patientData?.fullName ||
+        auth.currentUser.displayName ||
+        'Paciente';
+
+      const professionalName =
+        professional?.fullName ||
+        professional?.name ||
+        'Profesional';
+
+      const professionalUserId =
+        professional?.userId || professional?.uid || '';
+
+      const appointmentRef = await addDoc(collection(db, 'appointments'), {
+        patientId,
         patientName,
-        patientEmail,
-        professionalId: professional.userId || professional.id,
-        professionalName: professional.name || professional.fullName || 'Profesional',
-        specialty: professional.specialty || 'Especialidad no disponible',
-        appointmentDate: selectedDate,
-        appointmentTime: selectedTime,
-        notes: notes.trim(),
+        patientEmail: auth.currentUser.email || '',
+        professionalId: professional.id,
+        professionalUserId,
+        professionalName,
+        professionalSpecialty: professional.specialty || '',
+        date: selectedDate.trim(),
+        time: selectedTime.trim(),
+        reason: reason.trim(),
         status: 'pending',
         createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
       });
 
-      Alert.alert(
-        'Cita agendada',
-        'Tu solicitud fue enviada correctamente.',
-        [
-          {
-            text: 'Ver mis citas',
-            onPress: () => navigation.replace('PatientAppointments'),
-          },
-        ]
-      );
+      if (professionalUserId) {
+        await addDoc(collection(db, 'users', professionalUserId, 'notifications'), {
+          title: 'Nueva cita agendada',
+          message: `${patientName} agendó una cita para el ${selectedDate.trim()} a las ${selectedTime.trim()}.`,
+          type: 'booking',
+          appointmentId: appointmentRef.id,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      await addDoc(collection(db, 'users', patientId, 'notifications'), {
+        title: 'Cita agendada con éxito',
+        message: `Tu cita con ${professionalName} fue agendada para el ${selectedDate.trim()} a las ${selectedTime.trim()}.`,
+        type: 'booking',
+        appointmentId: appointmentRef.id,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+
+      await notifyProfessionalByProfessionalDocId(professional.id, {
+        title: 'Nueva cita agendada',
+        body: `${patientName} agendó una cita para el ${selectedDate.trim()} a las ${selectedTime.trim()}.`,
+        data: {
+          screen: 'ProfessionalDashboard',
+          appointmentId: appointmentRef.id,
+          type: 'booking',
+        },
+      });
+
+      await scheduleLocalBookingNotification({
+        title: 'Cita agendada',
+        body: `Tu cita con ${professionalName} fue creada correctamente.`,
+        data: {
+          screen: 'PatientAppointments',
+          appointmentId: appointmentRef.id,
+          type: 'booking',
+        },
+      });
+
+      Alert.alert('Éxito', 'Tu cita fue agendada correctamente.', [
+        {
+          text: 'OK',
+          onPress: () => navigation.navigate('PatientAppointments'),
+        },
+      ]);
     } catch (error) {
-      console.log('Error creando cita:', error);
-      Alert.alert('Error', 'No pudimos agendar la cita.');
+      console.log('Error agendando cita:', error);
+      Alert.alert('Error', 'No se pudo agendar la cita.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Volver</Text>
-        </TouchableOpacity>
+    <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.title}>Agendar Cita</Text>
 
-        <View style={styles.hero}>
-          <Text style={styles.heroLabel}>Reserva</Text>
-          <Text style={styles.heroTitle}>Agenda tu cita</Text>
-          <Text style={styles.heroSubtitle}>
-            Confirma fecha, hora y agrega un motivo breve para la atención.
-          </Text>
-        </View>
+      <Text style={styles.label}>Profesional</Text>
+      <Text style={styles.value}>
+        {professional?.fullName || professional?.name || 'Profesional'}
+      </Text>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Profesional</Text>
-          <Text style={styles.professionalName}>
-            {professional?.name || professional?.fullName || 'Profesional'}
-          </Text>
-          <Text style={styles.professionalMeta}>
-            {professional?.specialty || 'Especialidad no disponible'}
-          </Text>
-        </View>
+      <Text style={styles.label}>Fecha</Text>
+      <TextInput
+        style={styles.input}
+        value={selectedDate}
+        onChangeText={setSelectedDate}
+        placeholder="25/04/2026"
+      />
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Selecciona una fecha</Text>
-          <View style={styles.optionsWrap}>
-            {AVAILABLE_DATES.map((date) => {
-              const active = selectedDate === date;
-              return (
-                <TouchableOpacity
-                  key={date}
-                  style={[styles.optionChip, active && styles.optionChipActive]}
-                  onPress={() => setSelectedDate(date)}
-                >
-                  <Text style={[styles.optionText, active && styles.optionTextActive]}>
-                    {date}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+      <Text style={styles.label}>Hora</Text>
+      <TextInput
+        style={styles.input}
+        value={selectedTime}
+        onChangeText={setSelectedTime}
+        placeholder="15:30"
+      />
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Selecciona una hora</Text>
-          <View style={styles.optionsWrap}>
-            {AVAILABLE_TIMES.map((time) => {
-              const active = selectedTime === time;
-              return (
-                <TouchableOpacity
-                  key={time}
-                  style={[styles.optionChip, active && styles.optionChipActive]}
-                  onPress={() => setSelectedTime(time)}
-                >
-                  <Text style={[styles.optionText, active && styles.optionTextActive]}>
-                    {time}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+      <Text style={styles.label}>Motivo</Text>
+      <TextInput
+        style={[styles.input, styles.textArea]}
+        value={reason}
+        onChangeText={setReason}
+        placeholder="Motivo de la consulta"
+        multiline
+      />
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Motivo o notas</Text>
-          <TextInput
-            style={styles.textArea}
-            value={notes}
-            onChangeText={setNotes}
-            placeholder="Ej: dolor de garganta, control general, consulta psicológica..."
-            placeholderTextColor="#98A2B3"
-            multiline
-          />
-        </View>
-
-        <TouchableOpacity
-          style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
-          disabled={!canSubmit}
-          onPress={handleCreateAppointment}
-        >
-          {loading ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.submitButtonText}>Confirmar solicitud</Text>
-          )}
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
+      <TouchableOpacity
+        style={styles.button}
+        onPress={handleBooking}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>Confirmar cita</Text>
+        )}
+      </TouchableOpacity>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-  },
-  content: {
+  container: {
+    flexGrow: 1,
+    backgroundColor: '#F4F7FB',
     padding: 20,
-    paddingBottom: 36,
+    paddingTop: 60,
   },
-  backButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#E4E7EC',
-    marginBottom: 14,
-  },
-  backText: {
-    color: '#344054',
+  title: {
+    fontSize: 28,
     fontWeight: '800',
+    color: '#1E293B',
+    marginBottom: 20,
+  },
+  label: {
     fontSize: 14,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 8,
+    marginTop: 8,
   },
-  hero: {
-    backgroundColor: '#2563EB',
-    borderRadius: 24,
-    padding: 22,
-    marginBottom: 18,
-  },
-  heroLabel: {
-    color: '#DBEAFE',
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  heroTitle: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  heroSubtitle: {
-    marginTop: 6,
-    color: '#E0EAFF',
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 21,
-  },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#EEF2F6',
-    marginBottom: 14,
-  },
-  sectionTitle: {
+  value: {
     fontSize: 16,
-    fontWeight: '800',
-    color: '#101828',
+    color: '#0F172A',
+    fontWeight: '600',
     marginBottom: 12,
   },
-  professionalName: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#101828',
-  },
-  professionalMeta: {
-    marginTop: 6,
-    fontSize: 14,
-    color: '#667085',
-    fontWeight: '600',
-  },
-  optionsWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  optionChip: {
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E4E7EC',
+  input: {
+    backgroundColor: '#fff',
     borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  optionChipActive: {
-    backgroundColor: '#2563EB',
-    borderColor: '#2563EB',
-  },
-  optionText: {
-    color: '#344054',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  optionTextActive: {
-    color: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   textArea: {
     minHeight: 110,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#D0D5DD',
-    backgroundColor: '#FCFCFD',
-    padding: 14,
     textAlignVertical: 'top',
-    color: '#101828',
-    fontSize: 14,
-    fontWeight: '600',
   },
-  submitButton: {
-    marginTop: 8,
+  button: {
     backgroundColor: '#2563EB',
-    borderRadius: 18,
     paddingVertical: 16,
+    borderRadius: 14,
     alignItems: 'center',
+    marginTop: 8,
   },
-  submitButtonDisabled: {
-    opacity: 0.6,
-  },
-  submitButtonText: {
-    color: '#FFFFFF',
+  buttonText: {
+    color: '#fff',
     fontSize: 16,
     fontWeight: '800',
   },

@@ -1,313 +1,286 @@
-// /screens/ProfessionalDetailScreen.js
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  Image,
   Linking,
   Alert,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function ProfessionalDetailScreen({ route, navigation }) {
-  const professional = route?.params?.professional;
+  const { professional } = route.params || {};
 
-  if (!professional) {
+  const professionalName = useMemo(() => {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.centerBox}>
-          <Text style={styles.errorTitle}>Profesional no encontrado</Text>
-          <Text style={styles.errorText}>
-            No pudimos cargar la información del profesional.
-          </Text>
-
-          <TouchableOpacity
-            style={styles.primaryButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.primaryButtonText}>Volver</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
+      professional?.name ||
+      professional?.fullName ||
+      professional?.displayName ||
+      'Profesional de la salud'
     );
-  }
+  }, [professional]);
 
-  const handleCall = async () => {
-    const phone = professional.phone || professional.phoneNumber;
+  const specialty = professional?.specialty || 'Especialidad no especificada';
+  const description =
+    professional?.description || 'Este profesional aún no ha agregado una descripción.';
+  const address = professional?.address || 'Dirección no disponible';
+  const email = professional?.email || '';
+  const photoURL = professional?.photoURL || '';
+  const verified = professional?.verified || false;
 
-    if (!phone) {
-      Alert.alert('Sin teléfono', 'Este profesional no tiene teléfono registrado.');
+  const latitude =
+    professional?.location?.latitude ??
+    professional?.latitude ??
+    null;
+
+  const longitude =
+    professional?.location?.longitude ??
+    professional?.longitude ??
+    null;
+
+  const handleBooking = () => {
+    if (!professional?.id) {
+      Alert.alert('Error', 'No se encontró la información del profesional.');
       return;
     }
 
-    const url = `tel:${phone}`;
-    const supported = await Linking.canOpenURL(url);
+    navigation.navigate('Booking', { professional });
+  };
 
-    if (supported) {
-      await Linking.openURL(url);
-    } else {
-      Alert.alert('Error', 'No se pudo abrir el marcador.');
+  const handleOpenMap = async () => {
+    if (latitude == null || longitude == null) {
+      Alert.alert('Ubicación no disponible', 'Este profesional no tiene coordenadas registradas.');
+      return;
+    }
+
+    const url = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert('Error', 'No fue posible abrir el mapa.');
+      }
+    } catch (error) {
+      console.log('Error abriendo mapa:', error);
+      Alert.alert('Error', 'No pudimos abrir la ubicación.');
     }
   };
 
   const handleEmail = async () => {
-    const email = professional.email;
-
     if (!email) {
-      Alert.alert('Sin correo', 'Este profesional no tiene correo registrado.');
+      Alert.alert('Correo no disponible', 'Este profesional no tiene correo registrado.');
       return;
     }
 
-    const url = `mailto:${email}`;
-    const supported = await Linking.canOpenURL(url);
+    const mailUrl = `mailto:${email}`;
 
-    if (supported) {
-      await Linking.openURL(url);
-    } else {
-      Alert.alert('Error', 'No se pudo abrir la app de correo.');
+    try {
+      const supported = await Linking.canOpenURL(mailUrl);
+      if (supported) {
+        await Linking.openURL(mailUrl);
+      } else {
+        Alert.alert('Error', 'No fue posible abrir el correo.');
+      }
+    } catch (error) {
+      console.log('Error abriendo email:', error);
+      Alert.alert('Error', 'No pudimos abrir el correo.');
     }
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-      >
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.backButtonText}>← Volver</Text>
-        </TouchableOpacity>
-
-        <View style={styles.heroCard}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {(professional.name || professional.fullName || 'P').charAt(0).toUpperCase()}
+    <ScrollView contentContainerStyle={styles.container}>
+      <View style={styles.headerCard}>
+        {photoURL ? (
+          <Image source={{ uri: photoURL }} style={styles.avatar} />
+        ) : (
+          <View style={styles.avatarPlaceholder}>
+            <Text style={styles.avatarPlaceholderText}>
+              {professionalName?.charAt(0)?.toUpperCase() || 'P'}
             </Text>
           </View>
+        )}
 
-          <Text style={styles.name}>
-            {professional.name || professional.fullName || 'Profesional'}
-          </Text>
+        <Text style={styles.name}>{professionalName}</Text>
+        <Text style={styles.specialty}>{specialty}</Text>
 
-          <Text style={styles.specialty}>
-            {professional.specialty || 'Especialidad no disponible'}
-          </Text>
-
-          <View
-            style={[
-              styles.verificationBadge,
-              professional.verified ? styles.verifiedBadge : styles.unverifiedBadge,
-            ]}
-          >
-            <Text style={styles.verificationBadgeText}>
-              {professional.verified ? 'Perfil verificado' : 'Perfil no verificado'}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.infoCard}>
-          <Text style={styles.sectionTitle}>Información profesional</Text>
-
-          <Text style={styles.infoItem}>
-            📍 {professional.address || 'Dirección no disponible'}
-          </Text>
-
-          <Text style={styles.infoItem}>
-            ✉️ {professional.email || 'Correo no disponible'}
-          </Text>
-
-          <Text style={styles.infoItem}>
-            📞 {professional.phone || professional.phoneNumber || 'Teléfono no disponible'}
-          </Text>
-
-          <Text style={styles.infoItem}>
-            🩺 {professional.specialty || 'Especialidad no disponible'}
+        <View style={[styles.badge, verified ? styles.badgeVerified : styles.badgePending]}>
+          <Text style={styles.badgeText}>
+            {verified ? 'Verificado' : 'No verificado'}
           </Text>
         </View>
+      </View>
 
-        <View style={styles.infoCard}>
-          <Text style={styles.sectionTitle}>Descripción</Text>
-          <Text style={styles.description}>
-            {professional.description || 'Este profesional aún no ha agregado una descripción.'}
-          </Text>
+      <View style={styles.infoCard}>
+        <Text style={styles.sectionTitle}>Sobre el profesional</Text>
+        <Text style={styles.description}>{description}</Text>
+      </View>
+
+      <View style={styles.infoCard}>
+        <Text style={styles.sectionTitle}>Información de contacto</Text>
+
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Dirección</Text>
+          <Text style={styles.infoValue}>{address}</Text>
         </View>
 
-        <View style={styles.actionsRow}>
-          <TouchableOpacity style={styles.secondaryButton} onPress={handleCall}>
-            <Text style={styles.secondaryButtonText}>Llamar</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.secondaryButton} onPress={handleEmail}>
-            <Text style={styles.secondaryButtonText}>Correo</Text>
-          </TouchableOpacity>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoLabel}>Correo</Text>
+          <Text style={styles.infoValue}>{email || 'No disponible'}</Text>
         </View>
+      </View>
 
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={() =>
-            navigation.navigate('Booking', {
-              professional,
-            })
-          }
-        >
+      <View style={styles.actionsContainer}>
+        <TouchableOpacity style={styles.primaryButton} onPress={handleBooking}>
           <Text style={styles.primaryButtonText}>Agendar cita</Text>
         </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
+
+        <TouchableOpacity style={styles.secondaryButton} onPress={handleOpenMap}>
+          <Text style={styles.secondaryButtonText}>Ver ubicación</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.secondaryButton} onPress={handleEmail}>
+          <Text style={styles.secondaryButtonText}>Enviar correo</Text>
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-  },
-  content: {
+  container: {
     padding: 20,
-    paddingBottom: 36,
+    backgroundColor: '#F8FAFC',
+    flexGrow: 1,
   },
-  backButton: {
-    alignSelf: 'flex-start',
+  headerCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#E4E7EC',
-    marginBottom: 14,
-  },
-  backButtonText: {
-    color: '#344054',
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  heroCard: {
-    backgroundColor: '#2563EB',
-    borderRadius: 26,
+    borderRadius: 24,
     padding: 24,
     alignItems: 'center',
-    marginBottom: 16,
+    marginTop: 10,
+    marginBottom: 18,
+    shadowColor: '#000',
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   avatar: {
-    width: 74,
-    height: 74,
-    borderRadius: 24,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    marginBottom: 16,
+  },
+  avatarPlaceholder: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
     backgroundColor: '#DBEAFE',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 14,
+    marginBottom: 16,
   },
-  avatarText: {
-    color: '#1D4ED8',
+  avatarPlaceholderText: {
+    fontSize: 38,
     fontWeight: '800',
-    fontSize: 28,
+    color: '#2563EB',
   },
   name: {
-    color: '#FFFFFF',
     fontSize: 24,
     fontWeight: '800',
+    color: '#0F172A',
     textAlign: 'center',
+    marginBottom: 6,
   },
   specialty: {
-    marginTop: 6,
-    color: '#E0EAFF',
-    fontSize: 15,
-    fontWeight: '700',
+    fontSize: 16,
+    color: '#475569',
     textAlign: 'center',
+    marginBottom: 14,
   },
-  verificationBadge: {
-    marginTop: 14,
-    borderRadius: 999,
-    paddingHorizontal: 12,
+  badge: {
     paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
   },
-  verifiedBadge: {
-    backgroundColor: '#D1FADF',
+  badgeVerified: {
+    backgroundColor: '#DCFCE7',
   },
-  unverifiedBadge: {
-    backgroundColor: '#EFF4FF',
+  badgePending: {
+    backgroundColor: '#FEF3C7',
   },
-  verificationBadgeText: {
-    color: '#344054',
-    fontSize: 12,
-    fontWeight: '800',
+  badgeText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
   },
   infoCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 18,
-    borderWidth: 1,
-    borderColor: '#EEF2F6',
-    marginBottom: 14,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
-    color: '#101828',
+    color: '#1E293B',
     marginBottom: 12,
   },
-  infoItem: {
-    color: '#475467',
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 10,
-    lineHeight: 21,
-  },
   description: {
-    color: '#667085',
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 22,
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 14,
-  },
-  secondaryButton: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    paddingVertical: 15,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E4E7EC',
-  },
-  secondaryButtonText: {
-    color: '#344054',
     fontSize: 15,
-    fontWeight: '800',
+    lineHeight: 22,
+    color: '#475569',
+  },
+  infoRow: {
+    marginBottom: 12,
+  },
+  infoLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+    marginBottom: 4,
+  },
+  infoValue: {
+    fontSize: 15,
+    color: '#334155',
+  },
+  actionsContainer: {
+    marginTop: 6,
+    marginBottom: 30,
   },
   primaryButton: {
-    backgroundColor: '#0F172A',
-    borderRadius: 18,
+    backgroundColor: '#2E86DE',
     paddingVertical: 16,
+    borderRadius: 16,
     alignItems: 'center',
+    marginBottom: 12,
   },
   primaryButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '800',
   },
-  centerBox: {
-    flex: 1,
+  secondaryButton: {
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 15,
+    borderRadius: 16,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  errorTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#101828',
-  },
-  errorText: {
-    marginTop: 8,
-    fontSize: 14,
-    color: '#667085',
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 20,
+  secondaryButtonText: {
+    color: '#1E293B',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

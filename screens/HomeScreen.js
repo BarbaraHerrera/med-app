@@ -14,7 +14,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { signOut } from 'firebase/auth';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, onSnapshot } from 'firebase/firestore';
+import { Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../firebaseConfig';
 import { addToHistory } from '../services/historyService';
 
@@ -38,6 +39,7 @@ export default function HomeScreen({ navigation }) {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [loading, setLoading] = useState(true);
   const [userLocation, setUserLocation] = useState(null);
+  const [notificationCount, setNotificationCount] = useState(0);
 
   const mapRef = useRef(null);
 
@@ -53,6 +55,29 @@ export default function HomeScreen({ navigation }) {
   useEffect(() => {
     filterProfessionals(search, selectedCategory);
   }, [search, selectedCategory, professionals]);
+
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+
+    const notificationsRef = collection(db, 'users', uid, 'notifications');
+
+    const unsubscribe = onSnapshot(
+      notificationsRef,
+      (snapshot) => {
+        const unread = snapshot.docs.filter(
+          (docItem) => docItem.data()?.read === false
+        ).length;
+
+        setNotificationCount(unread);
+      },
+      (error) => {
+        console.log('Error cargando notificaciones del paciente:', error);
+      }
+    );
+
+    return unsubscribe;
+  }, []);
 
   const featuredProfessional = useMemo(() => {
     if (!filteredProfessionals.length) return null;
@@ -252,6 +277,10 @@ export default function HomeScreen({ navigation }) {
     navigation.navigate('PatientAppointments');
   };
 
+  const openNotifications = () => {
+    navigation.navigate('PatientNotifications');
+  };
+
   const openProfessionalDetail = async (professional) => {
     try {
       await addToHistory({
@@ -344,6 +373,17 @@ export default function HomeScreen({ navigation }) {
           </View>
 
           <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.iconButton} onPress={openNotifications}>
+              <Ionicons name="notifications-outline" size={20} color="#0F172A" />
+              {notificationCount > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationBadgeText}>
+                    {notificationCount > 9 ? '9+' : notificationCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.iconButton} onPress={openAppointments}>
               <Text style={styles.iconButtonText}>🕘</Text>
             </TouchableOpacity>
@@ -578,9 +618,27 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 12,
     elevation: 4,
+    position: 'relative',
   },
   iconButtonText: {
     fontSize: 18,
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#EF4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  notificationBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
   },
   searchCard: {
     backgroundColor: '#FFFFFF',

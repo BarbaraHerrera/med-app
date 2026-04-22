@@ -1,4 +1,3 @@
-// /screens/ProfessionalDashboardScreen.js
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
@@ -20,9 +19,12 @@ import {
   doc,
   updateDoc,
   serverTimestamp,
+  getDocs,
+  addDoc,
 } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../firebaseConfig';
+import { registerForPushNotificationsAsync } from '../services/notifications';
 
 export default function ProfessionalDashboardScreen({ navigation }) {
   const [appointments, setAppointments] = useState([]);
@@ -30,8 +32,14 @@ export default function ProfessionalDashboardScreen({ navigation }) {
   const [loadingAppointments, setLoadingAppointments] = useState(true);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
+  const [notificationCount, setNotificationCount] = useState(0);
 
   const uid = auth.currentUser?.uid;
+
+  useEffect(() => {
+    if (!uid) return;
+    saveProfessionalPushToken();
+  }, [uid]);
 
   useEffect(() => {
     if (!uid) return;
@@ -68,9 +76,36 @@ export default function ProfessionalDashboardScreen({ navigation }) {
   useEffect(() => {
     if (!uid) return;
 
+    const notificationsRef = collection(db, 'users', uid, 'notifications');
+
+    const unsubscribeNotifications = onSnapshot(
+      notificationsRef,
+      (snapshot) => {
+        const unread = snapshot.docs.filter(
+          (docItem) => docItem.data()?.read === false
+        ).length;
+
+        setNotificationCount(unread);
+      },
+      (error) => {
+        console.log('Error cargando notificaciones del profesional:', error);
+      }
+    );
+
+    return unsubscribeNotifications;
+  }, [uid]);
+
+  useEffect(() => {
+    if (!professionalData?.id) {
+      setLoadingAppointments(false);
+      return;
+    }
+
+    setLoadingAppointments(true);
+
     const appointmentsQuery = query(
       collection(db, 'appointments'),
-      where('professionalId', '==', uid)
+      where('professionalId', '==', professionalData.id)
     );
 
     const unsubscribeAppointments = onSnapshot(
@@ -82,8 +117,8 @@ export default function ProfessionalDashboardScreen({ navigation }) {
             ...docItem.data(),
           }))
           .sort((a, b) => {
-            const dateA = `${a.appointmentDate || ''} ${a.appointmentTime || ''}`;
-            const dateB = `${b.appointmentDate || ''} ${b.appointmentTime || ''}`;
+            const dateA = `${a.date || ''} ${a.time || ''}`;
+            const dateB = `${b.date || ''} ${b.time || ''}`;
             return dateA.localeCompare(dateB);
           });
 
@@ -98,7 +133,33 @@ export default function ProfessionalDashboardScreen({ navigation }) {
     );
 
     return unsubscribeAppointments;
-  }, [uid]);
+  }, [professionalData?.id]);
+
+  const saveProfessionalPushToken = async () => {
+    try {
+      if (!uid) return;
+
+      const token = await registerForPushNotificationsAsync();
+      if (!token) return;
+
+      const q = query(collection(db, 'professionals'), where('userId', '==', uid));
+      const snap = await getDocs(q);
+
+      if (snap.empty) return;
+
+      const professionalDoc = snap.docs[0];
+
+      await updateDoc(doc(db, 'professionals', professionalDoc.id), {
+        expoPushToken: token,
+        notificationsEnabled: true,
+        updatedAt: serverTimestamp(),
+      });
+
+      console.log('Token push profesional guardado:', token);
+    } catch (error) {
+      console.log('Error guardando token push profesional:', error);
+    }
+  };
 
   const stats = useMemo(() => {
     return {
@@ -109,14 +170,57 @@ export default function ProfessionalDashboardScreen({ navigation }) {
     };
   }, [appointments]);
 
-  const updateStatus = async (appointmentId, status) => {
+  const createNotificationForPatient = async (appointment, status) => {
     try {
-      setUpdatingId(appointmentId);
+      if (!appointment?.patientId) return;
 
-      await updateDoc(doc(db, 'appointments', appointmentId), {
+      let title = 'Actualización de cita';
+      let message = 'Tu cita fue actualizada.';
+
+      const professionalName =
+        professionalData?.fullName ||
+        professionalData?.name ||
+        'el profesional';
+
+      if (status === 'confirmed') {
+        title = 'Cita confirmada';
+        message = `Tu cita con ${professionalName} fue confirmada para el ${appointment.date || 'día seleccionado'} a las ${appointment.time || 'hora seleccionada'}.`;
+      }
+
+      if (status === 'completed') {
+        title = 'Cita completada';
+        message = `Tu cita con ${professionalName} fue marcada como completada.`;
+      }
+
+      if (status === 'cancelled') {
+        title = 'Cita cancelada';
+        message = `Tu cita con ${professionalName} fue cancelada.`;
+      }
+
+      await addDoc(collection(db, 'users', appointment.patientId, 'notifications'), {
+        title,
+        message,
+        type: 'appointment_update',
+        appointmentId: appointment.id,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.log('Error creando notificación para paciente:', error);
+    }
+  };
+
+  const updateStatus = async (appointment, status) => {
+    try {
+      setUpdatingId(appointment.id);
+
+      await updateDoc(doc(db, 'appointments', appointment.id), {
         status,
         updatedAt: serverTimestamp(),
       });
+
+      await createNotificationForPatient(appointment, status);
+      Alert.alert('Éxito', 'Estado de la cita actualizado.');
     } catch (error) {
       console.log('Error actualizando estado de cita:', error);
       Alert.alert('Error', 'No pudimos actualizar el estado de la cita.');
@@ -202,10 +306,27 @@ export default function ProfessionalDashboardScreen({ navigation }) {
             </Text>
           </View>
 
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <Ionicons name="log-out-outline" size={18} color="#344054" />
-            <Text style={styles.logoutText}>Salir</Text>
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.notificationButton}
+              onPress={() => navigation.navigate('ProfessionalNotifications')}
+            >
+              <Ionicons name="notifications-outline" size={22} color="#344054" />
+
+              {notificationCount > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationBadgeText}>
+                    {notificationCount > 9 ? '9+' : notificationCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+              <Ionicons name="log-out-outline" size={18} color="#344054" />
+              <Text style={styles.logoutText}>Salir</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.heroCard}>
@@ -216,8 +337,8 @@ export default function ProfessionalDashboardScreen({ navigation }) {
 
             <View style={styles.heroTextWrap}>
               <Text style={styles.heroName}>
-                {professionalData?.name ||
-                  professionalData?.fullName ||
+                {professionalData?.fullName ||
+                  professionalData?.name ||
                   'Profesional'}
               </Text>
               <Text style={styles.heroSpecialty}>
@@ -232,7 +353,11 @@ export default function ProfessionalDashboardScreen({ navigation }) {
           <View style={styles.heroActions}>
             <TouchableOpacity
               style={styles.primaryHeroButton}
-              onPress={() => navigation.navigate('ProfessionalScreen')}
+              onPress={() =>
+                navigation.navigate('ProfessionalProfile', {
+                  professional: professionalData,
+                })
+              }
             >
               <Ionicons name="person-outline" size={18} color="#2563EB" />
               <Text style={styles.primaryHeroButtonText}>Mi perfil profesional</Text>
@@ -240,7 +365,11 @@ export default function ProfessionalDashboardScreen({ navigation }) {
 
             <TouchableOpacity
               style={styles.secondaryHeroButton}
-              onPress={() => navigation.navigate('ProfessionalProfile')}
+              onPress={() =>
+                navigation.navigate('ProfessionalProfile', {
+                  professional: professionalData,
+                })
+              }
             >
               <Ionicons name="create-outline" size={18} color="#FFFFFF" />
               <Text style={styles.secondaryHeroButtonText}>Editar perfil</Text>
@@ -259,7 +388,11 @@ export default function ProfessionalDashboardScreen({ navigation }) {
 
           <View style={styles.statCard}>
             <View style={[styles.statIconWrap, { backgroundColor: '#DCFCE7' }]}>
-              <Ionicons name="checkmark-circle-outline" size={18} color="#16A34A" />
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={18}
+                color="#16A34A"
+              />
             </View>
             <Text style={styles.statNumber}>{stats.confirmed}</Text>
             <Text style={styles.statLabel}>Confirmadas</Text>
@@ -288,7 +421,11 @@ export default function ProfessionalDashboardScreen({ navigation }) {
 
             <TouchableOpacity
               style={styles.miniActionButton}
-              onPress={() => navigation.navigate('ProfessionalScreen')}
+              onPress={() =>
+                navigation.navigate('ProfessionalProfile', {
+                  professional: professionalData,
+                })
+              }
             >
               <Text style={styles.miniActionButtonText}>Ver perfil</Text>
             </TouchableOpacity>
@@ -308,8 +445,8 @@ export default function ProfessionalDashboardScreen({ navigation }) {
                     longitude,
                   }}
                   title={
-                    professionalData?.name ||
                     professionalData?.fullName ||
+                    professionalData?.name ||
                     'Profesional'
                   }
                   description={
@@ -335,7 +472,11 @@ export default function ProfessionalDashboardScreen({ navigation }) {
 
             <TouchableOpacity
               style={styles.profileButtonSmall}
-              onPress={() => navigation.navigate('ProfessionalProfile')}
+              onPress={() =>
+                navigation.navigate('ProfessionalProfile', {
+                  professional: professionalData,
+                })
+              }
             >
               <Text style={styles.profileButtonSmallText}>Mi perfil</Text>
             </TouchableOpacity>
@@ -375,42 +516,45 @@ export default function ProfessionalDashboardScreen({ navigation }) {
                   📧 {item.patientEmail || 'Correo no disponible'}
                 </Text>
                 <Text style={styles.info}>
-                  🩺 {item.specialty || 'Especialidad no disponible'}
+                  📅 {item.date || 'Sin fecha'}
                 </Text>
                 <Text style={styles.info}>
-                  📅 {item.appointmentDate || 'Sin fecha'}
-                </Text>
-                <Text style={styles.info}>
-                  ⏰ {item.appointmentTime || 'Sin hora'}
+                  ⏰ {item.time || 'Sin hora'}
                 </Text>
 
-                {!!item.notes && (
-                  <Text style={styles.info}>📝 {item.notes}</Text>
+                {!!item.reason && (
+                  <Text style={styles.info}>📝 {item.reason}</Text>
                 )}
 
                 <View style={styles.actionsWrap}>
                   <TouchableOpacity
                     style={[styles.actionBtn, styles.confirmBtn]}
                     disabled={updatingId === item.id}
-                    onPress={() => updateStatus(item.id, 'confirmed')}
+                    onPress={() => updateStatus(item, 'confirmed')}
                   >
-                    <Text style={styles.actionText}>Confirmar</Text>
+                    <Text style={styles.actionText}>
+                      {updatingId === item.id ? 'Actualizando...' : 'Confirmar'}
+                    </Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={[styles.actionBtn, styles.completeBtn]}
                     disabled={updatingId === item.id}
-                    onPress={() => updateStatus(item.id, 'completed')}
+                    onPress={() => updateStatus(item, 'completed')}
                   >
-                    <Text style={styles.actionText}>Completar</Text>
+                    <Text style={styles.actionText}>
+                      {updatingId === item.id ? 'Actualizando...' : 'Completar'}
+                    </Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={[styles.actionBtn, styles.cancelBtn]}
                     disabled={updatingId === item.id}
-                    onPress={() => updateStatus(item.id, 'cancelled')}
+                    onPress={() => updateStatus(item, 'cancelled')}
                   >
-                    <Text style={styles.actionText}>Cancelar</Text>
+                    <Text style={styles.actionText}>
+                      {updatingId === item.id ? 'Actualizando...' : 'Cancelar'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -457,6 +601,39 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     lineHeight: 21,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  notificationButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E4E7EC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  notificationBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
   },
   logoutButton: {
     backgroundColor: '#FFFFFF',

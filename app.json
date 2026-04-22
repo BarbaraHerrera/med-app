@@ -6,22 +6,41 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
+
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+
+    "plugins": ["expo-notifications"],
+
+    "notification": {
+      "icon": "./assets/icon.png",
+      "color": "#2563EB",
+      "androidMode": "default",
+      "androidCollapsedTitle": "MedApp"
+    },
+
+    "extra": {
+      "eas": {
+        "projectId": "b88a9296-c98d-40fd-a5c6-7fa695c6200a"
+      }
+    },
+
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para mostrar profesionales de salud cercanos."
+        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para mostrar profesionales de salud cercanos.",
+        "NSUserNotificationUsageDescription": "Te enviaremos notificaciones sobre tus citas médicas."
       }
     },
+
     "android": {
       "permissions": [
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "ACCESS_COARSE_LOCATION",
+        "POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -29,14 +48,11 @@
       },
       "edgeToEdgeEnabled": true
     },
+
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "expo": {
-        "plugins": [
-          "expo-notifications"
-        ]
-      }
-    
+
+    "owner": "bubu.hs"
   }
 }
