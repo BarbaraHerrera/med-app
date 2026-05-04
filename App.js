@@ -33,7 +33,7 @@ const Stack = createNativeStackNavigator();
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [userRole, setUserRole] = useState(null);
+  const [userRole, setUserRole] = useState(undefined); // 👈 CLAVE
   const [initializing, setInitializing] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
 
@@ -52,8 +52,11 @@ export default function App() {
 
           if (userSnap.exists()) {
             const data = userSnap.data();
-            setUserRole(data.role || null);
+            console.log('ROL OBTENIDO:', data.role);
+
+            setUserRole(data.role ?? null); // 👈 fallback correcto
           } else {
+            console.log('Usuario sin documento');
             setUserRole(null);
           }
         } catch (error) {
@@ -78,11 +81,13 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  // Splash
   if (showSplash) {
     return <SplashScreen />;
   }
 
-  if (initializing) {
+  // Loader mientras obtiene auth + rol
+  if (initializing || userRole === undefined) {
     return (
       <View
         style={{
@@ -100,52 +105,39 @@ export default function App() {
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
+        
+        {/* NO LOGUEADO */}
         {!user ? (
           <>
             <Stack.Screen name="Login" component={LoginScreen} />
             <Stack.Screen name="Register" component={RegisterScreen} />
-            <Stack.Screen
-              name="ForgotPassword"
-              component={ForgotPasswordScreen}
-            />
+            <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           </>
         ) : userRole === null ? (
-          <>
-            <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
-          </>
+          
+          /* SIN ROL */
+          <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
+          
         ) : userRole === 'patient' ? (
+          
+          /* PACIENTE */
           <>
             <Stack.Screen name="Home" component={HomeScreen} />
             <Stack.Screen name="Profile" component={ProfileScreen} />
             <Stack.Screen name="History" component={HistoryScreen} />
-            <Stack.Screen
-              name="ProfessionalDetail"
-              component={ProfessionalDetailScreen}
-            />
+            <Stack.Screen name="ProfessionalDetail" component={ProfessionalDetailScreen} />
             <Stack.Screen name="Booking" component={BookingScreen} />
-            <Stack.Screen
-              name="PatientAppointments"
-              component={PatientAppointmentsScreen}
-            />
-            <Stack.Screen
-              name="PatientNotifications"
-              component={PatientNotificationsScreen}
-            />
+            <Stack.Screen name="PatientAppointments" component={PatientAppointmentsScreen} />
+            <Stack.Screen name="PatientNotifications" component={PatientNotificationsScreen} />
           </>
+          
         ) : (
+          
+          /* PROFESIONAL */
           <>
-            <Stack.Screen
-              name="ProfessionalDashboard"
-              component={ProfessionalDashboardScreen}
-            />
-            <Stack.Screen
-              name="ProfessionalProfile"
-              component={ProfessionalProfileScreen}
-            />
-            <Stack.Screen
-              name="ProfessionalNotifications"
-              component={ProfessionalNotificationsScreen}
-            />
+            <Stack.Screen name="ProfessionalDashboard" component={ProfessionalDashboardScreen} />
+            <Stack.Screen name="ProfessionalProfile" component={ProfessionalProfileScreen} />
+            <Stack.Screen name="ProfessionalNotifications" component={ProfessionalNotificationsScreen} />
           </>
         )}
       </Stack.Navigator>

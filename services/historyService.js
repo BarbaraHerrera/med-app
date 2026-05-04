@@ -1,15 +1,31 @@
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
+import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 
-export const addToHistory = async ({ professionalId, type, title }) => {
-  const user = auth.currentUser;
+export async function addToHistory({
+  professionalId,
+  type,
+  title,
+}) {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
-  if (!user?.uid) return;
+    await addDoc(collection(db, 'users', uid, 'history'), {
+      professionalId: professionalId || '',
+      type: type || 'view',
+      title: title || 'Actividad',
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.log('Error guardando historial:', error);
+  }
+}
 
-  await addDoc(collection(db, 'users', user.uid, 'history'), {
+// Alias por compatibilidad si en otras pantallas usas saveHistory
+export async function saveHistory(type, title, professionalId) {
+  return addToHistory({
     professionalId,
     type,
     title,
-    createdAt: serverTimestamp(),
   });
-};
+}
