@@ -116,7 +116,14 @@ export default function App() {
         ) : userRole === null ? (
           
           /* SIN ROL */
-          <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
+          <Stack.Screen name="RoleSelection">
+              {(props) => (
+                <RoleSelectionScreen
+                  {...props}
+                  onRoleSelected={(role) => setUserRole(role)}
+                />
+              )}
+            </Stack.Screen>
           
         ) : userRole === 'patient' ? (
           

@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '../firebaseConfig';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
-export default function RoleSelectionScreen({ navigation }) {
+export default function RoleSelectionScreen({ onRoleSelected }) {
   const [loadingRole, setLoadingRole] = useState(null);
 
   const handleSelectRole = async (role) => {
@@ -26,12 +26,7 @@ export default function RoleSelectionScreen({ navigation }) {
       }, { merge: true });
 
       // Redirección limpia
-      navigation.reset({
-        index: 0,
-        routes: [
-          { name: role === 'patient' ? 'Home' : 'ProfessionalDashboard' }
-        ],
-      });
+      onRoleSelected(role);
 
     } catch (error) {
       console.log('Error guardando rol:', error);
