@@ -15,9 +15,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 
 import { auth, db, storage } from '../firebaseConfig';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 export default function ProfessionalProfileScreen({ navigation }) {
@@ -28,10 +29,13 @@ export default function ProfessionalProfileScreen({ navigation }) {
     address: '',
     phone: '',
     photoURL: '',
+    latitude: '',
+    longitude: '',
   });
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [locating, setLocating] = useState(false);
 
   useEffect(() => {
     loadProfile();
@@ -46,9 +50,13 @@ export default function ProfessionalProfileScreen({ navigation }) {
       const docSnap = await getDoc(docRef);
 
       if (docSnap.exists()) {
+        const data = docSnap.data();
+
         setProfessional((prev) => ({
           ...prev,
-          ...docSnap.data(),
+          ...data,
+          latitude: data?.location?.latitude?.toString() || '',
+          longitude: data?.location?.longitude?.toString() || '',
         }));
       }
     } catch (error) {
@@ -64,6 +72,45 @@ export default function ProfessionalProfileScreen({ navigation }) {
       ...prev,
       [field]: value,
     }));
+  };
+
+  const handleGetCurrentLocation = async () => {
+    try {
+      setLocating(true);
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso denegado',
+          'Debes permitir acceso a la ubicación para usar esta función.'
+        );
+        return;
+      }
+
+      const currentLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const latitude = currentLocation.coords.latitude;
+      const longitude = currentLocation.coords.longitude;
+
+      setProfessional((prev) => ({
+        ...prev,
+        latitude: latitude.toString(),
+        longitude: longitude.toString(),
+      }));
+
+      Alert.alert(
+        'Ubicación obtenida',
+        'Tu ubicación actual fue cargada correctamente. Presiona guardar cambios para actualizar tu perfil.'
+      );
+    } catch (error) {
+      console.log('Error obteniendo ubicación:', error);
+      Alert.alert('Error', 'No se pudo obtener tu ubicación actual.');
+    } finally {
+      setLocating(false);
+    }
   };
 
   const handlePickProfileImage = async () => {
@@ -94,15 +141,19 @@ export default function ProfessionalProfileScreen({ navigation }) {
       const blob = await response.blob();
 
       const imageRef = ref(storage, `professionals/${user.uid}/profile.jpg`);
-
       await uploadBytes(imageRef, blob);
 
       const photoURL = await getDownloadURL(imageRef);
 
-      await updateDoc(doc(db, 'professionals', user.uid), {
-        photoURL,
-        updatedAt: new Date(),
-      });
+      await setDoc(
+        doc(db, 'professionals', user.uid),
+        {
+          photoURL,
+          userId: user.uid,
+          updatedAt: new Date(),
+        },
+        { merge: true }
+      );
 
       setProfessional((prev) => ({
         ...prev,
@@ -123,9 +174,25 @@ export default function ProfessionalProfileScreen({ navigation }) {
       const user = auth.currentUser;
       if (!user) return;
 
+      const latitudeText = professional.latitude?.replace(',', '.');
+      const longitudeText = professional.longitude?.replace(',', '.');
+
+      const latitude = Number(latitudeText);
+      const longitude = Number(longitudeText);
+
+      if (professional.latitude && Number.isNaN(latitude)) {
+        Alert.alert('Ubicación inválida', 'La latitud debe ser un número válido.');
+        return;
+      }
+
+      if (professional.longitude && Number.isNaN(longitude)) {
+        Alert.alert('Ubicación inválida', 'La longitud debe ser un número válido.');
+        return;
+      }
+
       setSaving(true);
 
-      await updateDoc(doc(db, 'professionals', user.uid), {
+      const payload = {
         fullName: professional.fullName || '',
         specialty: professional.specialty || '',
         description: professional.description || '',
@@ -134,7 +201,16 @@ export default function ProfessionalProfileScreen({ navigation }) {
         photoURL: professional.photoURL || '',
         userId: user.uid,
         updatedAt: new Date(),
-      });
+      };
+
+      if (professional.latitude && professional.longitude) {
+        payload.location = {
+          latitude,
+          longitude,
+        };
+      }
+
+      await setDoc(doc(db, 'professionals', user.uid), payload, { merge: true });
 
       Alert.alert('Éxito', 'Perfil actualizado correctamente.');
     } catch (error) {
@@ -260,6 +336,48 @@ export default function ProfessionalProfileScreen({ navigation }) {
               placeholderTextColor="#9CA3AF"
             />
 
+            <Text style={styles.sectionTitle}>Ubicación en el mapa</Text>
+
+            <Text style={styles.helpText}>
+              Puedes usar tu ubicación actual automáticamente o ingresar latitud y longitud manualmente.
+            </Text>
+
+            <TouchableOpacity
+              style={[styles.locationButton, locating && styles.locationButtonDisabled]}
+              onPress={handleGetCurrentLocation}
+              disabled={locating || saving}
+              activeOpacity={0.85}
+            >
+              {locating ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="location" size={19} color="#fff" />
+                  <Text style={styles.locationButtonText}>Usar mi ubicación actual</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            <Text style={styles.label}>Latitud</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ej: -33.4489"
+              value={professional.latitude}
+              onChangeText={(text) => handleChange('latitude', text)}
+              keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'numeric'}
+              placeholderTextColor="#9CA3AF"
+            />
+
+            <Text style={styles.label}>Longitud</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ej: -70.6693"
+              value={professional.longitude}
+              onChangeText={(text) => handleChange('longitude', text)}
+              keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'numeric'}
+              placeholderTextColor="#9CA3AF"
+            />
+
             <Text style={styles.label}>Descripción</Text>
             <TextInput
               style={[styles.input, styles.textArea]}
@@ -277,7 +395,7 @@ export default function ProfessionalProfileScreen({ navigation }) {
           <TouchableOpacity
             style={[styles.saveButton, saving && styles.saveButtonDisabled]}
             onPress={handleSave}
-            disabled={saving}
+            disabled={saving || locating}
             activeOpacity={0.85}
           >
             {saving ? (
@@ -449,7 +567,13 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '800',
     color: '#111827',
-    marginBottom: 16,
+    marginBottom: 12,
+  },
+  helpText: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 19,
+    marginBottom: 14,
   },
   label: {
     fontSize: 13,
@@ -472,6 +596,24 @@ const styles = StyleSheet.create({
   textArea: {
     minHeight: 110,
     paddingTop: 14,
+  },
+  locationButton: {
+    backgroundColor: '#0F172A',
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  locationButtonDisabled: {
+    opacity: 0.7,
+  },
+  locationButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 14,
   },
   footer: {
     position: 'absolute',

@@ -3,18 +3,29 @@ import { ActivityIndicator, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+  collection,
+  query,
+  where,
+  limit,
+  getDocs,
+} from 'firebase/firestore';
 
 import { auth, db } from './firebaseConfig';
-import { setupNotificationChannel } from './services/notifications';
+import {
+  setupNotificationChannel,
+  registerAndSavePushToken,
+} from './services/notifications';
 
-// Auth
 import SplashScreen from './screens/SplashScreen';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import ForgotPasswordScreen from './screens/ForgotPasswordScreen';
 
-// Shared
 import RoleSelectionScreen from './screens/RoleSelectionScreen';
 import HomeScreen from './screens/HomeScreen';
 import ProfileScreen from './screens/ProfileScreen';
@@ -24,7 +35,6 @@ import BookingScreen from './screens/BookingScreen';
 import PatientAppointmentsScreen from './screens/PatientAppointmentsScreen';
 import PatientNotificationsScreen from './screens/PatientNotificationsScreen';
 
-// Professional
 import ProfessionalDashboardScreen from './screens/ProfessionalDashboardScreen';
 import ProfessionalProfileScreen from './screens/ProfessionalProfileScreen';
 import ProfessionalNotificationsScreen from './screens/ProfessionalNotificationsScreen';
@@ -33,7 +43,7 @@ const Stack = createNativeStackNavigator();
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [userRole, setUserRole] = useState(undefined); // 👈 CLAVE
+  const [userRole, setUserRole] = useState(undefined);
   const [initializing, setInitializing] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
 
@@ -42,51 +52,98 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 1800);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (authenticatedUser) => {
+      setInitializing(true);
       setUser(authenticatedUser);
 
-      if (authenticatedUser) {
-        try {
-          const userRef = doc(db, 'users', authenticatedUser.uid);
-          const userSnap = await getDoc(userRef);
-
-          if (userSnap.exists()) {
-            const data = userSnap.data();
-            console.log('ROL OBTENIDO:', data.role);
-
-            setUserRole(data.role ?? null); // 👈 fallback correcto
-          } else {
-            console.log('Usuario sin documento');
-            setUserRole(null);
-          }
-        } catch (error) {
-          console.log('Error obteniendo rol:', error);
-          setUserRole(null);
-        }
-      } else {
+      if (!authenticatedUser) {
         setUserRole(null);
+        setInitializing(false);
+        return;
       }
 
-      setInitializing(false);
+      try {
+        const uid = authenticatedUser.uid;
+        const userRef = doc(db, 'users', uid);
+        const userSnap = await getDoc(userRef);
+
+        if (userSnap.exists() && userSnap.data()?.role) {
+          const role = userSnap.data().role;
+          console.log('ROL OBTENIDO:', role);
+          setUserRole(role);
+          setInitializing(false);
+          return;
+        }
+
+        // Respaldo: si ya existe como profesional
+        const profQuery = query(
+          collection(db, 'professionals'),
+          where('userId', '==', uid),
+          limit(1)
+        );
+
+        const profSnap = await getDocs(profQuery);
+
+        if (!profSnap.empty) {
+          console.log('ROL RECUPERADO DESDE PROFESSIONALS: professional');
+
+          await setDoc(
+            userRef,
+            {
+              role: 'professional',
+              email: authenticatedUser.email,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+
+          setUserRole('professional');
+          setInitializing(false);
+          return;
+        }
+
+        // Si no tiene rol ni perfil profesional, recién ahí pregunta
+          console.log('Usuario sin rol definido, asignando patient por defecto');
+
+          await setDoc(
+            userRef,
+            {
+              uid,
+              email: authenticatedUser.email,
+              role: 'patient',
+              onboardingCompleted: true,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+
+setUserRole('patient');
+      } finally {
+        setInitializing(false);
+      }
     });
 
     return unsubscribe;
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-    }, 2200);
+    if (user) {
+      registerAndSavePushToken();
+    }
+  }, [user]);
 
-    return () => clearTimeout(timer);
-  }, []);
-
-  // Splash
   if (showSplash) {
     return <SplashScreen />;
   }
 
-  // Loader mientras obtiene auth + rol
   if (initializing || userRole === undefined) {
     return (
       <View
@@ -105,8 +162,6 @@ export default function App() {
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        
-        {/* NO LOGUEADO */}
         {!user ? (
           <>
             <Stack.Screen name="Login" component={LoginScreen} />
@@ -114,20 +169,15 @@ export default function App() {
             <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           </>
         ) : userRole === null ? (
-          
-          /* SIN ROL */
           <Stack.Screen name="RoleSelection">
-              {(props) => (
-                <RoleSelectionScreen
-                  {...props}
-                  onRoleSelected={(role) => setUserRole(role)}
-                />
-              )}
-            </Stack.Screen>
-          
+            {(props) => (
+              <RoleSelectionScreen
+                {...props}
+                onRoleSelected={(role) => setUserRole(role)}
+              />
+            )}
+          </Stack.Screen>
         ) : userRole === 'patient' ? (
-          
-          /* PACIENTE */
           <>
             <Stack.Screen name="Home" component={HomeScreen} />
             <Stack.Screen name="Profile" component={ProfileScreen} />
@@ -137,10 +187,7 @@ export default function App() {
             <Stack.Screen name="PatientAppointments" component={PatientAppointmentsScreen} />
             <Stack.Screen name="PatientNotifications" component={PatientNotificationsScreen} />
           </>
-          
         ) : (
-          
-          /* PROFESIONAL */
           <>
             <Stack.Screen name="ProfessionalDashboard" component={ProfessionalDashboardScreen} />
             <Stack.Screen name="ProfessionalProfile" component={ProfessionalProfileScreen} />

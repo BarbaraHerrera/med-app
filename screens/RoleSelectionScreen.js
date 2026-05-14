@@ -19,11 +19,13 @@ export default function RoleSelectionScreen({ onRoleSelected }) {
 
     try {
       // Guardar rol principal
-      await setDoc(doc(db, 'users', uid), {
-        role,
-        email: user.email,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
+    await setDoc(doc(db, 'users', uid), {
+      uid,
+      role,
+      email: user.email,
+      onboardingCompleted: true,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
 
       // Redirección limpia
       onRoleSelected(role);
