@@ -23,6 +23,7 @@ import {
   scheduleLocalBookingNotification,
   notifyProfessionalByProfessionalDocId,
 } from '../services/notifications';
+import * as Location from 'expo-location';
 
 export default function BookingScreen({ route, navigation }) {
   const { professional } = route.params || {};
@@ -57,6 +58,25 @@ export default function BookingScreen({ route, navigation }) {
   };
 
   const handleBooking = async () => {
+let patientLocation = null;
+
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+
+        if (status === 'granted') {
+          const location = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.High,
+          });
+
+          patientLocation = {
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+          };
+        }
+      } catch (error) {
+        console.log('No se pudo obtener ubicación del paciente:', error);
+      }
+
     try {
       if (!auth.currentUser?.uid || !professional?.id) {
         Alert.alert('Error', 'Faltan datos para agendar.');
@@ -120,6 +140,9 @@ export default function BookingScreen({ route, navigation }) {
         appointmentId: appointmentRef.id,
         read: false,
         createdAt: serverTimestamp(),
+        patientLocation,
+        trackingEnabled: false,
+        professionalCurrentLocation: null,
       });
 
       await notifyProfessionalByProfessionalDocId(professional.id, {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,9 +8,12 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
+
 import {
   collection,
   query,
@@ -22,6 +25,7 @@ import {
   getDocs,
   addDoc,
 } from 'firebase/firestore';
+
 import { signOut } from 'firebase/auth';
 import { auth, db } from '../firebaseConfig';
 import { registerForPushNotificationsAsync } from '../services/notifications';
@@ -33,13 +37,21 @@ export default function ProfessionalDashboardScreen({ navigation }) {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
   const [notificationCount, setNotificationCount] = useState(0);
+  const [trackingAppointmentId, setTrackingAppointmentId] = useState(null);
 
+  const locationSubscriptionRef = useRef(null);
   const uid = auth.currentUser?.uid;
 
   useEffect(() => {
     if (!uid) return;
     saveProfessionalPushToken();
   }, [uid]);
+
+  useEffect(() => {
+    return () => {
+      stopLiveTracking();
+    };
+  }, []);
 
   useEffect(() => {
     if (!uid) return;
@@ -54,6 +66,7 @@ export default function ProfessionalDashboardScreen({ navigation }) {
       (snapshot) => {
         if (!snapshot.empty) {
           const docItem = snapshot.docs[0];
+
           setProfessionalData({
             id: docItem.id,
             ...docItem.data(),
@@ -61,6 +74,7 @@ export default function ProfessionalDashboardScreen({ navigation }) {
         } else {
           setProfessionalData(null);
         }
+
         setLoadingProfile(false);
       },
       (error) => {
@@ -96,16 +110,13 @@ export default function ProfessionalDashboardScreen({ navigation }) {
   }, [uid]);
 
   useEffect(() => {
-    if (!professionalData?.id) {
-      setLoadingAppointments(false);
-      return;
-    }
+    if (!uid) return;
 
     setLoadingAppointments(true);
 
     const appointmentsQuery = query(
       collection(db, 'appointments'),
-      where('professionalId', '==', professionalData.id)
+      where('professionalUserId', '==', uid)
     );
 
     const unsubscribeAppointments = onSnapshot(
@@ -133,16 +144,21 @@ export default function ProfessionalDashboardScreen({ navigation }) {
     );
 
     return unsubscribeAppointments;
-  }, [professionalData?.id]);
+  }, [uid]);
 
   const saveProfessionalPushToken = async () => {
     try {
       if (!uid) return;
 
       const token = await registerForPushNotificationsAsync();
+
       if (!token) return;
 
-      const q = query(collection(db, 'professionals'), where('userId', '==', uid));
+      const q = query(
+        collection(db, 'professionals'),
+        where('userId', '==', uid)
+      );
+
       const snap = await getDocs(q);
 
       if (snap.empty) return;
@@ -158,6 +174,68 @@ export default function ProfessionalDashboardScreen({ navigation }) {
       console.log('Token push profesional guardado:', token);
     } catch (error) {
       console.log('Error guardando token push profesional:', error);
+    }
+  };
+
+  const startLiveTracking = async (appointmentId) => {
+    try {
+      if (!appointmentId) return;
+
+      await stopLiveTracking();
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso requerido',
+          'Necesitamos acceso a tu ubicación para activar el seguimiento en vivo.'
+        );
+        return;
+      }
+
+      setTrackingAppointmentId(appointmentId);
+
+      locationSubscriptionRef.current = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          timeInterval: 5000,
+          distanceInterval: 10,
+        },
+        async (location) => {
+          const { latitude, longitude } = location.coords;
+
+          try {
+            await updateDoc(doc(db, 'appointments', appointmentId), {
+              liveLocation: {
+                latitude,
+                longitude,
+                updatedAt: serverTimestamp(),
+              },
+              trackingEnabled: true,
+              trackingStatus: 'active',
+              updatedAt: serverTimestamp(),
+            });
+          } catch (error) {
+            console.log('Error actualizando ubicación en vivo:', error);
+          }
+        }
+      );
+    } catch (error) {
+      console.log('Error iniciando seguimiento en vivo:', error);
+      Alert.alert('Error', 'No pudimos iniciar el seguimiento en vivo.');
+    }
+  };
+
+  const stopLiveTracking = async () => {
+    try {
+      if (locationSubscriptionRef.current) {
+        locationSubscriptionRef.current.remove();
+        locationSubscriptionRef.current = null;
+      }
+
+      setTrackingAppointmentId(null);
+    } catch (error) {
+      console.log('Error deteniendo seguimiento:', error);
     }
   };
 
@@ -180,11 +258,12 @@ export default function ProfessionalDashboardScreen({ navigation }) {
       const professionalName =
         professionalData?.fullName ||
         professionalData?.name ||
+        appointment?.professionalName ||
         'el profesional';
 
       if (status === 'confirmed') {
         title = 'Cita confirmada';
-        message = `Tu cita con ${professionalName} fue confirmada para el ${appointment.date || 'día seleccionado'} a las ${appointment.time || 'hora seleccionada'}.`;
+        message = `Tu cita con ${professionalName} fue confirmada. El seguimiento en vivo está activo.`;
       }
 
       if (status === 'completed') {
@@ -214,12 +293,35 @@ export default function ProfessionalDashboardScreen({ navigation }) {
     try {
       setUpdatingId(appointment.id);
 
-      await updateDoc(doc(db, 'appointments', appointment.id), {
+      const updateData = {
         status,
         updatedAt: serverTimestamp(),
-      });
+      };
+
+      if (status === 'confirmed') {
+        updateData.trackingEnabled = true;
+        updateData.trackingStatus = 'active';
+        updateData.trackingStartedAt = serverTimestamp();
+      }
+
+      if (status === 'completed' || status === 'cancelled') {
+        updateData.trackingEnabled = false;
+        updateData.trackingStatus = 'inactive';
+        updateData.trackingEndedAt = serverTimestamp();
+      }
+
+      await updateDoc(doc(db, 'appointments', appointment.id), updateData);
+
+      if (status === 'confirmed') {
+        await startLiveTracking(appointment.id);
+      }
+
+      if (status === 'completed' || status === 'cancelled') {
+        await stopLiveTracking();
+      }
 
       await createNotificationForPatient(appointment, status);
+
       Alert.alert('Éxito', 'Estado de la cita actualizado.');
     } catch (error) {
       console.log('Error actualizando estado de cita:', error);
@@ -231,6 +333,7 @@ export default function ProfessionalDashboardScreen({ navigation }) {
 
   const handleLogout = async () => {
     try {
+      await stopLiveTracking();
       await signOut(auth);
     } catch (error) {
       console.log('Error cerrando sesión:', error);
@@ -302,7 +405,8 @@ export default function ProfessionalDashboardScreen({ navigation }) {
             <Text style={styles.topLabel}>Panel profesional</Text>
             <Text style={styles.topTitle}>Tu dashboard</Text>
             <Text style={styles.topSubtitle}>
-              Administra tus citas, revisa tu ubicación y accede rápido a tu perfil.
+              Administra tus citas, revisa tu ubicación y accede rápido a tu
+              perfil.
             </Text>
           </View>
 
@@ -311,7 +415,11 @@ export default function ProfessionalDashboardScreen({ navigation }) {
               style={styles.notificationButton}
               onPress={() => navigation.navigate('ProfessionalNotifications')}
             >
-              <Ionicons name="notifications-outline" size={22} color="#344054" />
+              <Ionicons
+                name="notifications-outline"
+                size={22}
+                color="#344054"
+              />
 
               {notificationCount > 0 && (
                 <View style={styles.notificationBadge}>
@@ -329,6 +437,15 @@ export default function ProfessionalDashboardScreen({ navigation }) {
           </View>
         </View>
 
+        {trackingAppointmentId && (
+          <View style={styles.trackingBanner}>
+            <Ionicons name="location" size={18} color="#FFFFFF" />
+            <Text style={styles.trackingBannerText}>
+              Seguimiento en vivo activo
+            </Text>
+          </View>
+        )}
+
         <View style={styles.heroCard}>
           <View style={styles.heroHeaderRow}>
             <View style={styles.avatarCircle}>
@@ -341,9 +458,11 @@ export default function ProfessionalDashboardScreen({ navigation }) {
                   professionalData?.name ||
                   'Profesional'}
               </Text>
+
               <Text style={styles.heroSpecialty}>
                 {professionalData?.specialty || 'Especialidad no disponible'}
               </Text>
+
               <Text style={styles.heroMeta}>
                 {professionalData?.address || 'Dirección no disponible'}
               </Text>
@@ -360,7 +479,9 @@ export default function ProfessionalDashboardScreen({ navigation }) {
               }
             >
               <Ionicons name="person-outline" size={18} color="#2563EB" />
-              <Text style={styles.primaryHeroButtonText}>Mi perfil profesional</Text>
+              <Text style={styles.primaryHeroButtonText}>
+                Mi perfil profesional
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -456,7 +577,10 @@ export default function ProfessionalDashboardScreen({ navigation }) {
               </MapView>
             ) : (
               <View style={styles.mapFallback}>
-                <Text style={styles.mapFallbackTitle}>Sin ubicación registrada</Text>
+                <Text style={styles.mapFallbackTitle}>
+                  Sin ubicación registrada
+                </Text>
+
                 <Text style={styles.mapFallbackText}>
                   Agrega latitude y longitude en tu perfil profesional para que
                   aparezca el mapa.
@@ -486,7 +610,10 @@ export default function ProfessionalDashboardScreen({ navigation }) {
             <ActivityIndicator color="#2563EB" style={{ marginTop: 20 }} />
           ) : appointments.length === 0 ? (
             <View style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>Aún no tienes citas registradas</Text>
+              <Text style={styles.emptyTitle}>
+                Aún no tienes citas registradas
+              </Text>
+
               <Text style={styles.emptyText}>
                 Cuando un paciente agende una hora, aparecerá aquí para que la
                 puedas gestionar.
@@ -512,15 +639,21 @@ export default function ProfessionalDashboardScreen({ navigation }) {
                   </View>
                 </View>
 
+                {item.trackingEnabled && (
+                  <View style={styles.liveChip}>
+                    <Ionicons name="radio-outline" size={14} color="#16A34A" />
+                    <Text style={styles.liveChipText}>
+                      Seguimiento activo
+                    </Text>
+                  </View>
+                )}
+
                 <Text style={styles.info}>
                   📧 {item.patientEmail || 'Correo no disponible'}
                 </Text>
-                <Text style={styles.info}>
-                  📅 {item.date || 'Sin fecha'}
-                </Text>
-                <Text style={styles.info}>
-                  ⏰ {item.time || 'Sin hora'}
-                </Text>
+
+                <Text style={styles.info}>📅 {item.date || 'Sin fecha'}</Text>
+                <Text style={styles.info}>⏰ {item.time || 'Sin hora'}</Text>
 
                 {!!item.reason && (
                   <Text style={styles.info}>📝 {item.reason}</Text>
@@ -648,6 +781,21 @@ const styles = StyleSheet.create({
   },
   logoutText: {
     color: '#344054',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  trackingBanner: {
+    backgroundColor: '#16A34A',
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  trackingBannerText: {
+    color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 14,
   },
@@ -881,6 +1029,22 @@ const styles = StyleSheet.create({
     color: '#475467',
     fontSize: 14,
     fontWeight: '600',
+  },
+  liveChip: {
+    marginTop: 10,
+    backgroundColor: '#DCFCE7',
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  liveChipText: {
+    color: '#16A34A',
+    fontWeight: '800',
+    fontSize: 12,
   },
   statusBadge: {
     borderRadius: 999,

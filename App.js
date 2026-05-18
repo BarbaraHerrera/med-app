@@ -3,6 +3,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { onAuthStateChanged } from 'firebase/auth';
+
 import {
   doc,
   getDoc,
@@ -16,6 +17,7 @@ import {
 } from 'firebase/firestore';
 
 import { auth, db } from './firebaseConfig';
+
 import {
   setupNotificationChannel,
   registerAndSavePushToken,
@@ -38,6 +40,7 @@ import PatientNotificationsScreen from './screens/PatientNotificationsScreen';
 import ProfessionalDashboardScreen from './screens/ProfessionalDashboardScreen';
 import ProfessionalProfileScreen from './screens/ProfessionalProfileScreen';
 import ProfessionalNotificationsScreen from './screens/ProfessionalNotificationsScreen';
+import AppointmentTrackingScreen from './screens/AppointmentTrackingScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -72,18 +75,20 @@ export default function App() {
 
       try {
         const uid = authenticatedUser.uid;
+
         const userRef = doc(db, 'users', uid);
         const userSnap = await getDoc(userRef);
 
         if (userSnap.exists() && userSnap.data()?.role) {
           const role = userSnap.data().role;
+
           console.log('ROL OBTENIDO:', role);
+
           setUserRole(role);
           setInitializing(false);
           return;
         }
 
-        // Respaldo: si ya existe como profesional
         const profQuery = query(
           collection(db, 'professionals'),
           where('userId', '==', uid),
@@ -98,8 +103,10 @@ export default function App() {
           await setDoc(
             userRef,
             {
+              uid,
               role: 'professional',
               email: authenticatedUser.email,
+              onboardingCompleted: true,
               updatedAt: serverTimestamp(),
             },
             { merge: true }
@@ -110,22 +117,23 @@ export default function App() {
           return;
         }
 
-        // Si no tiene rol ni perfil profesional, recién ahí pregunta
-          console.log('Usuario sin rol definido, asignando patient por defecto');
+        console.log('Usuario sin rol definido. Mostrando selección de rol.');
 
-          await setDoc(
-            userRef,
-            {
-              uid,
-              email: authenticatedUser.email,
-              role: 'patient',
-              onboardingCompleted: true,
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
+        await setDoc(
+          userRef,
+          {
+            uid,
+            email: authenticatedUser.email,
+            onboardingCompleted: false,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
 
-setUserRole('patient');
+        setUserRole(null);
+      } catch (error) {
+        console.log('Error obteniendo rol:', error);
+        setUserRole(null);
       } finally {
         setInitializing(false);
       }
@@ -135,10 +143,10 @@ setUserRole('patient');
   }, []);
 
   useEffect(() => {
-    if (user) {
+    if (user && userRole) {
       registerAndSavePushToken();
     }
-  }, [user]);
+  }, [user, userRole]);
 
   if (showSplash) {
     return <SplashScreen />;
@@ -166,7 +174,10 @@ setUserRole('patient');
           <>
             <Stack.Screen name="Login" component={LoginScreen} />
             <Stack.Screen name="Register" component={RegisterScreen} />
-            <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+            <Stack.Screen
+              name="ForgotPassword"
+              component={ForgotPasswordScreen}
+            />
           </>
         ) : userRole === null ? (
           <Stack.Screen name="RoleSelection">
@@ -182,16 +193,38 @@ setUserRole('patient');
             <Stack.Screen name="Home" component={HomeScreen} />
             <Stack.Screen name="Profile" component={ProfileScreen} />
             <Stack.Screen name="History" component={HistoryScreen} />
-            <Stack.Screen name="ProfessionalDetail" component={ProfessionalDetailScreen} />
+            <Stack.Screen
+              name="ProfessionalDetail"
+              component={ProfessionalDetailScreen}
+            />
             <Stack.Screen name="Booking" component={BookingScreen} />
-            <Stack.Screen name="PatientAppointments" component={PatientAppointmentsScreen} />
-            <Stack.Screen name="PatientNotifications" component={PatientNotificationsScreen} />
+            <Stack.Screen
+              name="PatientAppointments"
+              component={PatientAppointmentsScreen}
+            />
+            <Stack.Screen
+              name="PatientNotifications"
+              component={PatientNotificationsScreen}
+            />
+            <Stack.Screen
+              name="AppointmentTracking"
+              component={AppointmentTrackingScreen}
+            />
           </>
         ) : (
           <>
-            <Stack.Screen name="ProfessionalDashboard" component={ProfessionalDashboardScreen} />
-            <Stack.Screen name="ProfessionalProfile" component={ProfessionalProfileScreen} />
-            <Stack.Screen name="ProfessionalNotifications" component={ProfessionalNotificationsScreen} />
+            <Stack.Screen
+              name="ProfessionalDashboard"
+              component={ProfessionalDashboardScreen}
+            />
+            <Stack.Screen
+              name="ProfessionalProfile"
+              component={ProfessionalProfileScreen}
+            />
+            <Stack.Screen
+              name="ProfessionalNotifications"
+              component={ProfessionalNotificationsScreen}
+            />
           </>
         )}
       </Stack.Navigator>

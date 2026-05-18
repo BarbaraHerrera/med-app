@@ -1,91 +1,78 @@
-// /screens/PatientAppointmentsScreen.js
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
   Alert,
 } from 'react-native';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
+import MapView, { Marker } from 'react-native-maps';
+import { Ionicons } from '@expo/vector-icons';
+
+import { auth, db } from '../firebaseConfig';
+
 import {
   collection,
-  onSnapshot,
   query,
   where,
+  onSnapshot,
+  orderBy,
 } from 'firebase/firestore';
-import { auth, db } from '../firebaseConfig';
 
 export default function PatientAppointmentsScreen({ navigation }) {
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  const uid = auth.currentUser?.uid;
+  const [selectedAppointment, setSelectedAppointment] = useState(null);
 
   useEffect(() => {
-    if (!uid) {
-      setAppointments([]);
+    const user = auth.currentUser;
+
+    if (!user) {
       setLoading(false);
       return;
     }
 
-    const q = query(
+    const appointmentsQuery = query(
       collection(db, 'appointments'),
-      where('patientId', '==', uid)
+      where('patientId', '==', user.uid),
+      orderBy('date', 'desc')
     );
 
     const unsubscribe = onSnapshot(
-      q,
+      appointmentsQuery,
       (snapshot) => {
-        const data = snapshot.docs
-          .map((docItem) => ({
-            id: docItem.id,
-            ...docItem.data(),
-          }))
-          .sort((a, b) => {
-            const dateA = `${a.appointmentDate || ''} ${a.appointmentTime || ''}`;
-            const dateB = `${b.appointmentDate || ''} ${b.appointmentTime || ''}`;
-            return dateA.localeCompare(dateB);
-          });
+        const list = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }));
 
-        setAppointments(data);
+        setAppointments(list);
+
+        if (selectedAppointment) {
+          const updatedSelected = list.find(
+            (item) => item.id === selectedAppointment.id
+          );
+
+          if (updatedSelected) {
+            setSelectedAppointment(updatedSelected);
+          }
+        }
+
         setLoading(false);
       },
       (error) => {
-        console.log('Error leyendo citas del paciente:', error);
-        Alert.alert('Error', 'No pudimos cargar tus horas agendadas.');
+        console.log('Error cargando citas del paciente:', error);
+        Alert.alert('Error', 'No pudimos cargar tus citas.');
         setLoading(false);
       }
     );
 
     return unsubscribe;
-  }, [uid]);
-
-  const stats = useMemo(() => {
-    return {
-      pending: appointments.filter((a) => a.status === 'pending').length,
-      confirmed: appointments.filter((a) => a.status === 'confirmed').length,
-      completed: appointments.filter((a) => a.status === 'completed').length,
-      cancelled: appointments.filter((a) => a.status === 'cancelled').length,
-    };
-  }, [appointments]);
-
-  const getStatusBadgeStyle = (status) => {
-    switch (status) {
-      case 'confirmed':
-        return styles.confirmedBadge;
-      case 'pending':
-        return styles.pendingBadge;
-      case 'cancelled':
-        return styles.cancelledBadge;
-      case 'completed':
-        return styles.completedBadge;
-      default:
-        return styles.defaultBadge;
-    }
-  };
+  }, [selectedAppointment?.id]);
 
   const getStatusLabel = (status) => {
     switch (status) {
@@ -102,129 +89,222 @@ export default function PatientAppointmentsScreen({ navigation }) {
     }
   };
 
-  return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.headerRow}>
+  const getStatusStyle = (status) => {
+    switch (status) {
+      case 'confirmed':
+        return styles.confirmedBadge;
+      case 'pending':
+        return styles.pendingBadge;
+      case 'cancelled':
+        return styles.cancelledBadge;
+      case 'completed':
+        return styles.completedBadge;
+      default:
+        return styles.defaultBadge;
+    }
+  };
+
+  const hasLiveLocation = (appointment) => {
+    const latitude = appointment?.liveLocation?.latitude;
+    const longitude = appointment?.liveLocation?.longitude;
+
+    return (
+      appointment?.trackingEnabled === true &&
+      appointment?.trackingStatus === 'active' &&
+      typeof latitude === 'number' &&
+      typeof longitude === 'number' &&
+      !Number.isNaN(latitude) &&
+      !Number.isNaN(longitude)
+    );
+  };
+
+  const renderAppointment = ({ item }) => {
+    const liveAvailable = hasLiveLocation(item);
+
+    return (
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.name}>
+              {item.professionalName || 'Profesional'}
+            </Text>
+
+            <Text style={styles.specialty}>
+              {item.specialty || 'Especialidad no disponible'}
+            </Text>
+          </View>
+
+          <View style={[styles.statusBadge, getStatusStyle(item.status)]}>
+            <Text style={styles.statusText}>
+              {getStatusLabel(item.status)}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.infoRow}>
+          <Text style={styles.label}>📅 Fecha:</Text>
+          <Text style={styles.value}>{item.date || 'Sin fecha'}</Text>
+        </View>
+
+        <View style={styles.infoRow}>
+          <Text style={styles.label}>🕐 Hora:</Text>
+          <Text style={styles.value}>{item.time || 'Sin hora'}</Text>
+        </View>
+
+        {!!item.reason && (
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>📝 Motivo:</Text>
+            <Text style={styles.value}>{item.reason}</Text>
+          </View>
+        )}
+
+        {item.trackingEnabled && (
+          <View style={styles.trackingInfo}>
+            <Ionicons name="location" size={16} color="#16A34A" />
+            <Text style={styles.trackingInfoText}>
+              {liveAvailable
+                ? 'Seguimiento en vivo disponible'
+                : 'Seguimiento activado, esperando ubicación del profesional'}
+            </Text>
+          </View>
+        )}
+
+        {liveAvailable && (
           <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.navigate('Home')}
+            style={styles.liveButton}
+            onPress={() => setSelectedAppointment(item)}
           >
-            <Text style={styles.backButtonText}>← Volver</Text>
+            <Ionicons name="map-outline" size={18} color="#FFFFFF" />
+            <Text style={styles.liveButtonText}>
+              Ver ubicación en vivo
+            </Text>
           </TouchableOpacity>
-        </View>
+        )}
+      </View>
+    );
+  };
 
-        <View style={styles.hero}>
-          <Text style={styles.heroLabel}>Mis horas</Text>
-          <Text style={styles.heroTitle}>Tus citas agendadas</Text>
-          <Text style={styles.heroSubtitle}>
-            Revisa el estado de tus solicitudes y próximas atenciones.
-          </Text>
-        </View>
+  const renderLiveMap = () => {
+    if (!selectedAppointment) return null;
 
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.pending}</Text>
-            <Text style={styles.statLabel}>Pendientes</Text>
-          </View>
+    const latitude = selectedAppointment?.liveLocation?.latitude;
+    const longitude = selectedAppointment?.liveLocation?.longitude;
 
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.confirmed}</Text>
-            <Text style={styles.statLabel}>Confirmadas</Text>
-          </View>
-        </View>
+    const liveAvailable = hasLiveLocation(selectedAppointment);
 
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.completed}</Text>
-            <Text style={styles.statLabel}>Completadas</Text>
-          </View>
+    return (
+      <View style={styles.liveMapOverlay}>
+        <SafeAreaView style={styles.liveMapContainer}>
+          <View style={styles.liveMapHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.liveMapTitle}>
+                Ubicación en vivo
+              </Text>
 
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{stats.cancelled}</Text>
-            <Text style={styles.statLabel}>Canceladas</Text>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Listado de citas</Text>
-
-          {loading ? (
-            <ActivityIndicator color="#2563EB" style={{ marginTop: 20 }} />
-          ) : appointments.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>Aún no tienes horas agendadas</Text>
-              <Text style={styles.emptyText}>
-                Cuando agendes una atención, aparecerá aquí con su estado.
+              <Text style={styles.liveMapSubtitle}>
+                {selectedAppointment.professionalName || 'Profesional'}
               </Text>
             </View>
+
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setSelectedAppointment(null)}
+            >
+              <Ionicons name="close" size={24} color="#111827" />
+            </TouchableOpacity>
+          </View>
+
+          {liveAvailable ? (
+            <MapView
+              style={styles.liveMap}
+              region={{
+                latitude,
+                longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              }}
+            >
+              <Marker
+                coordinate={{
+                  latitude,
+                  longitude,
+                }}
+                title={
+                  selectedAppointment.professionalName || 'Profesional'
+                }
+                description="Ubicación actual del profesional"
+              />
+            </MapView>
           ) : (
-            appointments.map((item) => (
-              <View key={item.id} style={styles.appointmentCard}>
-                <View style={styles.appointmentHeader}>
-                  <Text style={styles.professionalName}>
-                    {item.professionalName || 'Profesional'}
-                  </Text>
-
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      getStatusBadgeStyle(item.status),
-                    ]}
-                  >
-                    <Text style={styles.statusText}>
-                      {getStatusLabel(item.status)}
-                    </Text>
-                  </View>
-                </View>
-
-                <Text style={styles.appointmentInfo}>
-                  🩺 {item.specialty || 'Especialidad no disponible'}
-                </Text>
-                <Text style={styles.appointmentInfo}>
-                  📅 {item.appointmentDate || 'Sin fecha'}
-                </Text>
-                <Text style={styles.appointmentInfo}>
-                  ⏰ {item.appointmentTime || 'Sin hora'}
-                </Text>
-
-                {!!item.notes && (
-                  <Text style={styles.appointmentInfo}>
-                    📝 {item.notes}
-                  </Text>
-                )}
-
-                {item.status === 'pending' && (
-                  <Text style={styles.statusDescription}>
-                    Tu solicitud fue enviada y está pendiente de confirmación.
-                  </Text>
-                )}
-
-                {item.status === 'confirmed' && (
-                  <Text style={styles.statusDescription}>
-                    Tu cita fue confirmada por el profesional.
-                  </Text>
-                )}
-
-                {item.status === 'completed' && (
-                  <Text style={styles.statusDescription}>
-                    Esta atención ya fue realizada.
-                  </Text>
-                )}
-
-                {item.status === 'cancelled' && (
-                  <Text style={styles.statusDescription}>
-                    Esta cita fue cancelada.
-                  </Text>
-                )}
-              </View>
-            ))
+            <View style={styles.noLiveContainer}>
+              <Ionicons name="location-outline" size={50} color="#9CA3AF" />
+              <Text style={styles.noLiveTitle}>
+                Ubicación aún no disponible
+              </Text>
+              <Text style={styles.noLiveText}>
+                El profesional debe tener activa su ubicación para mostrar el
+                seguimiento en vivo.
+              </Text>
+            </View>
           )}
+
+          <View style={styles.liveFooter}>
+            <Text style={styles.liveFooterText}>
+              Esta ubicación se actualiza automáticamente mientras la cita esté
+              confirmada y el seguimiento siga activo.
+            </Text>
+          </View>
+        </SafeAreaView>
+      </View>
+    );
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.loaderContainer}>
+        <ActivityIndicator size="large" color="#2563EB" />
+        <Text style={styles.loadingText}>Cargando tus citas...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Ionicons name="arrow-back" size={22} color="#111827" />
+        </TouchableOpacity>
+
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Mis citas</Text>
+          <Text style={styles.subtitle}>
+            Revisa tus horas agendadas y el seguimiento en vivo.
+          </Text>
         </View>
-      </ScrollView>
+      </View>
+
+      {appointments.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="calendar-outline" size={54} color="#9CA3AF" />
+          <Text style={styles.emptyTitle}>No tienes citas agendadas</Text>
+          <Text style={styles.emptyText}>
+            Cuando reserves una hora con un profesional, aparecerá aquí.
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={appointments}
+          keyExtractor={(item) => item.id}
+          renderItem={renderAppointment}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
+
+      {renderLiveMap()}
     </SafeAreaView>
   );
 }
@@ -234,129 +314,92 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8FAFC',
   },
-  content: {
-    padding: 20,
-    paddingBottom: 36,
+  loaderContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  headerRow: {
-    marginBottom: 14,
+  loadingText: {
+    marginTop: 10,
+    color: '#667085',
+    fontWeight: '600',
+  },
+  header: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   backButton: {
-    alignSelf: 'flex-start',
+    width: 44,
+    height: 44,
+    borderRadius: 16,
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#E4E7EC',
   },
-  backButtonText: {
-    color: '#344054',
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  hero: {
-    backgroundColor: '#2563EB',
-    borderRadius: 24,
-    padding: 22,
-    marginBottom: 18,
-  },
-  heroLabel: {
-    color: '#DBEAFE',
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  heroTitle: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  heroSubtitle: {
-    marginTop: 6,
-    color: '#E0EAFF',
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 21,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-    gap: 12,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    paddingVertical: 20,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#EEF2F6',
-  },
-  statNumber: {
-    fontSize: 24,
+  title: {
+    fontSize: 28,
     fontWeight: '800',
     color: '#101828',
   },
-  statLabel: {
-    marginTop: 6,
+  subtitle: {
+    marginTop: 3,
+    fontSize: 14,
     color: '#667085',
-    fontWeight: '700',
-    fontSize: 13,
+    fontWeight: '600',
   },
-  section: {
-    marginTop: 6,
+  listContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 30,
   },
-  sectionTitle: {
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    padding: 18,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#EEF2F6',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 2,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+    gap: 10,
+  },
+  name: {
     fontSize: 18,
     fontWeight: '800',
     color: '#101828',
-    marginBottom: 12,
   },
-  emptyCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#EEF2F6',
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#101828',
-  },
-  emptyText: {
-    marginTop: 6,
+  specialty: {
+    marginTop: 4,
     fontSize: 14,
     color: '#667085',
-    lineHeight: 21,
+    fontWeight: '600',
   },
-  appointmentCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#EEF2F6',
-  },
-  appointmentHeader: {
+  infoRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    marginTop: 7,
   },
-  professionalName: {
-    fontSize: 16,
+  label: {
     fontWeight: '800',
-    color: '#101828',
-    flex: 1,
-    paddingRight: 10,
+    color: '#344054',
+    marginRight: 6,
   },
-  appointmentInfo: {
-    marginTop: 8,
+  value: {
+    flex: 1,
     color: '#475467',
-    fontSize: 14,
     fontWeight: '600',
   },
   statusBadge: {
@@ -384,11 +427,131 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#344054',
   },
-  statusDescription: {
-    marginTop: 10,
+  trackingInfo: {
+    marginTop: 14,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  trackingInfoText: {
+    flex: 1,
+    color: '#166534',
+    fontWeight: '700',
     fontSize: 13,
-    lineHeight: 19,
+  },
+  liveButton: {
+    marginTop: 14,
+    backgroundColor: '#2563EB',
+    borderRadius: 16,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  liveButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  emptyContainer: {
+    flex: 1,
+    paddingHorizontal: 34,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyTitle: {
+    marginTop: 16,
+    fontSize: 18,
+    color: '#101828',
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  emptyText: {
+    marginTop: 8,
+    color: '#667085',
+    textAlign: 'center',
+    lineHeight: 21,
+    fontWeight: '600',
+  },
+  liveMapOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#FFFFFF',
+    zIndex: 99,
+  },
+  liveMapContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  liveMapHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 14,
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E4E7EC',
+  },
+  liveMapTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#101828',
+  },
+  liveMapSubtitle: {
+    marginTop: 3,
+    fontSize: 14,
     color: '#667085',
     fontWeight: '600',
+  },
+  closeButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: '#F2F4F7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveMap: {
+    flex: 1,
+  },
+  noLiveContainer: {
+    flex: 1,
+    paddingHorizontal: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noLiveTitle: {
+    marginTop: 14,
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#101828',
+    textAlign: 'center',
+  },
+  noLiveText: {
+    marginTop: 8,
+    color: '#667085',
+    textAlign: 'center',
+    lineHeight: 21,
+    fontWeight: '600',
+  },
+  liveFooter: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#E4E7EC',
+  },
+  liveFooterText: {
+    color: '#667085',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
